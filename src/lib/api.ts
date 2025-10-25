@@ -81,3 +81,7 @@ export async function pickImageFile(): Promise<string | null> {
 
   return typeof selection === 'string' ? selection : null;
 }
+
+export async function decryptImage(path: string): Promise<Uint8Array> {
+  return invoke<number[]>('decrypt_image', { path }).then(arr => new Uint8Array(arr));
+}

@@ -1,19 +1,25 @@
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
+use aes::Aes256;
 use anyhow::{anyhow, Context, Result};
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::{engine::general_purpose, Engine as _};
+use ctr::cipher::{KeyIvInit, StreamCipher};
 use parking_lot::Mutex;
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use uuid::Uuid;
 
+type Aes256Ctr = ctr::Ctr128BE<Aes256>;
+
 const VAULT_VERSION: u32 = 1;
 const METADATA_VERSION: u32 = 1;
 const ENTRY_VERSION: u32 = 1;
+const IMAGE_MAGIC: &[u8] = b"VAULTIMG"; // 8 字节魔数标识加密图片
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntryInfo {
@@ -302,7 +308,11 @@ impl VaultManager {
             .filter(|ext| !ext.is_empty())
             .unwrap_or("bin");
         let (target_path, relative) = attachment_target(vault, extension)?;
-        fs::copy(&source, &target_path).context("无法复制图片文件")?;
+        
+        // 读取并加密图片
+        let data = fs::read(&source).context("无法读取图片文件")?;
+        let encrypted = encrypt_image_data(&vault.key, &data)?;
+        fs::write(&target_path, encrypted).context("无法保存加密图片")?;
 
         Ok(display_path(&relative))
     }
@@ -322,9 +332,35 @@ impl VaultManager {
 
         let extension = infer_image_extension(name.as_deref(), mime.as_deref());
         let (target_path, relative) = attachment_target(vault, &extension)?;
-        fs::write(&target_path, data).context("无法写入图片数据")?;
+        
+        // 加密图片数据
+        let encrypted = encrypt_image_data(&vault.key, &data)?;
+        fs::write(&target_path, encrypted).context("无法写入加密图片数据")?;
 
         Ok(display_path(&relative))
+    }
+
+    pub fn decrypt_image(&self, path: &str) -> Result<Vec<u8>> {
+        let guard = self.inner.lock();
+        let vault = guard.as_ref().ok_or_else(|| anyhow!("vault is locked"))?;
+        
+        // 解析路径（可能是相对路径或绝对路径）
+        let image_path = if Path::new(path).is_absolute() {
+            PathBuf::from(path)
+        } else {
+            let root = vault.path
+                .parent()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| vault.path.clone());
+            root.join(path.trim_start_matches('/').trim_start_matches('\\'))
+        };
+        
+        if !image_path.exists() {
+            return Err(anyhow!("图片文件不存在"));
+        }
+        
+        let encrypted = fs::read(&image_path).context("无法读取图片文件")?;
+        decrypt_image_data(&vault.key, &encrypted)
     }
 }
 
@@ -373,7 +409,7 @@ fn derive_key(passphrase: &str, salt: &[u8; 16]) -> Result<[u8; 32]> {
     let argon = Argon2::new(
         Algorithm::Argon2id,
         Version::V0x13,
-        Params::new(19456, 2, 1, Some(32)).context("invalid argon2 parameters")?,
+        Params::new(32768, 2, 4, Some(32)).context("invalid argon2 parameters")?,
     );
     let mut key = [0u8; 32];
     argon
@@ -571,4 +607,54 @@ fn infer_image_extension(name: Option<&str>, mime: Option<&str>) -> String {
     }
 
     "bin".into()
+}
+
+// 使用 AES-256-CTR 加密图片
+fn encrypt_image_data(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>> {
+    // 生成随机 IV (16 字节，CTR 模式使用 128 位)
+    let mut iv = [0u8; 16];
+    OsRng.fill_bytes(&mut iv);
+    
+    // 创建输出缓冲区：魔数 + IV + 密文
+    let mut encrypted = Vec::with_capacity(IMAGE_MAGIC.len() + iv.len() + data.len());
+    encrypted.extend_from_slice(IMAGE_MAGIC);
+    encrypted.extend_from_slice(&iv);
+    
+    // 复制数据用于加密
+    let mut buffer = data.to_vec();
+    
+    // 使用 AES-256-CTR 加密
+    let mut cipher = Aes256Ctr::new(key.into(), &iv.into());
+    cipher.apply_keystream(&mut buffer);
+    
+    encrypted.extend_from_slice(&buffer);
+    Ok(encrypted)
+}
+
+fn decrypt_image_data(key: &[u8; 32], encrypted: &[u8]) -> Result<Vec<u8>> {
+    // 检查最小长度：魔数(8) + IV(16)
+    if encrypted.len() < IMAGE_MAGIC.len() + 16 {
+        return Err(anyhow!("invalid encrypted image: too short"));
+    }
+    
+    // 检查魔数
+    if &encrypted[..IMAGE_MAGIC.len()] != IMAGE_MAGIC {
+        // 不是加密图片，可能是旧版本的明文图片
+        return Ok(encrypted.to_vec());
+    }
+    
+    // 提取 IV
+    let iv_start = IMAGE_MAGIC.len();
+    let iv_end = iv_start + 16;
+    let iv = &encrypted[iv_start..iv_end];
+    
+    // 提取密文
+    let ciphertext = &encrypted[iv_end..];
+    let mut buffer = ciphertext.to_vec();
+    
+    // 使用 AES-256-CTR 解密
+    let mut cipher = Aes256Ctr::new(key.into(), iv.into());
+    cipher.apply_keystream(&mut buffer);
+    
+    Ok(buffer)
 }

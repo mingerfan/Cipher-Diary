@@ -15,6 +15,7 @@
   } from '../stores/vault';
   import {
     createVaultEntry,
+    decryptImage,
     deleteVaultEntry,
     exportVaultToFile,
     fetchEntries,
@@ -323,29 +324,91 @@
     void loadEntryDetail($activeEntryId);
   }
 
-  function resolveImageSource(root: string | null, href: string): string {
+  // 图片缓存：路径 -> data URL
+  let imageCache = new Map<string, string>();
+
+  async function resolveImageSource(root: string | null, href: string): Promise<string> {
     if (!href) return '';
     if (/^(https?:|data:|file:|tauri)/i.test(href)) {
       return href;
     }
     if (!root) return href;
+    
     const base = root.replace(/[\\/]+$/, '');
     const relative = href.replace(/^[/\\]+/, '').replace(/\\/g, '/');
     const fullPath = `${base}/${relative}`;
-    return convertFileSrc(fullPath);
+    
+    // 检查缓存
+    if (imageCache.has(fullPath)) {
+      return imageCache.get(fullPath)!;
+    }
+    
+    try {
+      // 解密图片
+      const data = await decryptImage(fullPath);
+      // 转换为 data URL
+      const blob = new Blob([data as any]);
+      const dataUrl = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.readAsDataURL(blob);
+      });
+      
+      imageCache.set(fullPath, dataUrl);
+      return dataUrl;
+    } catch (err) {
+      console.error('Failed to decrypt image:', err);
+      return '';
+    }
   }
 
-  $: previewHtml = (() => {
-    const renderer = new marked.Renderer();
-    const root = $vaultRoot;
-    renderer.image = ({ href = '', title, text }) => {
-      const src = resolveImageSource(root, href);
-      const titleAttr = title ? ` title="${title}"` : '';
-      const alt = text ?? '';
-      return `<img src="${src}" alt="${alt}"${titleAttr}>`;
-    };
-    return marked.parse(localContent || '', { renderer });
-  })();
+  let previewHtml = '';
+  let isRenderingPreview = false;
+
+  // 异步渲染预览 HTML
+  async function renderPreview(content: string, root: string | null) {
+    if (isRenderingPreview) return;
+    isRenderingPreview = true;
+    
+    try {
+      const renderer = new marked.Renderer();
+      const imagePromises: Promise<void>[] = [];
+      const imageMap = new Map<string, string>();
+      
+      // 第一遍：收集所有图片
+      renderer.image = ({ href = '', title, text }) => {
+        const placeholder = `__IMAGE_PLACEHOLDER_${imageMap.size}__`;
+        imageMap.set(placeholder, href);
+        imagePromises.push(
+          resolveImageSource(root, href).then(src => {
+            imageMap.set(placeholder, src);
+          })
+        );
+        return placeholder;
+      };
+      
+      let html = await marked.parse(content || '', { renderer });
+      
+      // 等待所有图片解密
+      await Promise.all(imagePromises);
+      
+      // 第二遍：替换占位符为实际图片
+      for (const [placeholder, src] of imageMap.entries()) {
+        if (src.startsWith('data:') || src.startsWith('http')) {
+          const alt = placeholder;
+          html = html.replace(placeholder, `<img src="${src}" alt="${alt}">`);
+        }
+      }
+      
+      previewHtml = html;
+    } finally {
+      isRenderingPreview = false;
+    }
+  }
+
+  $: if (localContent || $vaultRoot) {
+    void renderPreview(localContent, $vaultRoot);
+  }
 </script>
 
 <div class="layout">

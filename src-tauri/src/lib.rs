@@ -161,6 +161,14 @@ fn export_plaintext_file(state: State<AppState>) -> Result<String, String> {
     Ok(export_dir.to_string_lossy().into_owned())
 }
 
+#[tauri::command]
+fn decrypt_image(path: String, state: State<AppState>) -> Result<Vec<u8>, String> {
+    state
+        .manager
+        .decrypt_image(&path)
+        .map_err(|err| err.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -178,7 +186,8 @@ pub fn run() {
             export_plaintext,
             store_image,
             store_image_from_bytes,
-            export_plaintext_file
+            export_plaintext_file,
+            decrypt_image
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
