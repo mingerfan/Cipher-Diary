@@ -192,6 +192,7 @@
     margin-bottom: 2rem;
     text-align: center;
     color: #cbd5f5;
+    font-size: 1rem;
   }
 
   form {
@@ -212,6 +213,7 @@
     background: rgba(15, 23, 42, 0.6);
     color: #e2e8f0;
     transition: border 0.2s ease, box-shadow 0.2s ease;
+    font-size: 1rem;
   }
 
   input[type='password']:focus {
@@ -227,11 +229,13 @@
     font-size: 0.9rem;
     margin-top: 0.5rem;
     color: #cbd5f5;
+    cursor: pointer;
   }
 
   .confirm-toggle input {
     width: 18px;
     height: 18px;
+    cursor: pointer;
   }
 
   button[type='submit'] {
@@ -257,6 +261,10 @@
     box-shadow: 0 15px 40px rgba(99, 102, 241, 0.35);
   }
 
+  button[type='submit']:active:not(:disabled) {
+    transform: translateY(0);
+  }
+
   .directory-picker {
     margin-top: 0.75rem;
     padding: 1rem;
@@ -279,6 +287,7 @@
     font-size: 0.85rem;
     color: #cbd5f5;
     word-break: break-all;
+    overflow-wrap: break-word;
   }
 
   .picker-actions {
@@ -293,7 +302,8 @@
     border-radius: 10px;
     font-weight: 600;
     cursor: pointer;
-    transition: transform 0.15s ease;
+    transition: all 0.15s ease;
+    white-space: nowrap;
   }
 
   .secondary {
@@ -304,6 +314,11 @@
 
   .secondary:hover {
     transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(56, 189, 248, 0.4);
+  }
+
+  .secondary:active {
+    transform: translateY(0);
   }
 
   .ghost {
@@ -322,11 +337,180 @@
     padding: 0.6rem 0.8rem;
     border-radius: 10px;
     font-size: 0.9rem;
+    border: 1px solid rgba(239, 68, 68, 0.3);
   }
 
   footer {
     margin-top: 2rem;
     text-align: center;
     color: #94a3b8;
+    font-size: 0.875rem;
+  }
+
+  /* 平板设备 */
+  @media (max-width: 768px) {
+    .unlock-container {
+      padding: 1.5rem;
+    }
+
+    .card {
+      padding: 2rem 1.5rem;
+    }
+
+    h1 {
+      font-size: 1.6rem;
+    }
+
+    .tagline {
+      font-size: 0.95rem;
+      margin-bottom: 1.5rem;
+    }
+  }
+
+  /* 移动设备 */
+  @media (max-width: 480px) {
+    .unlock-container {
+      padding: 1rem;
+    }
+
+    .card {
+      padding: 1.5rem 1.25rem;
+      border-radius: 12px;
+    }
+
+    h1 {
+      font-size: 1.4rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .tagline {
+      font-size: 0.9rem;
+      margin-bottom: 1.25rem;
+    }
+
+    label {
+      font-size: 0.9rem;
+    }
+
+    input[type='password'] {
+      padding: 0.65rem 0.85rem;
+      font-size: 0.95rem;
+    }
+
+    .confirm-toggle {
+      font-size: 0.85rem;
+    }
+
+    .confirm-toggle input {
+      width: 16px;
+      height: 16px;
+    }
+
+    button[type='submit'] {
+      padding: 0.75rem 1rem;
+      font-size: 0.95rem;
+    }
+
+    .directory-picker {
+      padding: 0.85rem;
+    }
+
+    .directory-label {
+      font-size: 0.9rem;
+    }
+
+    .directory-hint {
+      font-size: 0.8rem;
+    }
+
+    .picker-actions {
+      gap: 0.5rem;
+    }
+
+    .secondary,
+    .ghost {
+      flex: 1;
+      text-align: center;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.9rem;
+    }
+
+    .error {
+      font-size: 0.85rem;
+      padding: 0.55rem 0.7rem;
+    }
+
+    footer {
+      margin-top: 1.5rem;
+      font-size: 0.8rem;
+    }
+  }
+
+  /* 超小屏设备 */
+  @media (max-width: 360px) {
+    .unlock-container {
+      padding: 0.75rem;
+    }
+
+    .card {
+      padding: 1.25rem 1rem;
+    }
+
+    h1 {
+      font-size: 1.25rem;
+    }
+
+    .tagline {
+      font-size: 0.85rem;
+    }
+
+    .secondary,
+    .ghost {
+      padding: 0.45rem 0.6rem;
+      font-size: 0.85rem;
+    }
+  }
+
+  /* 触摸设备优化 */
+  @media (hover: none) and (pointer: coarse) {
+    button,
+    input,
+    .confirm-toggle {
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    button[type='submit'],
+    .secondary,
+    .ghost {
+      padding: 0.75rem 1rem;
+    }
+  }
+
+  /* 横屏模式优化 */
+  @media (max-width: 768px) and (orientation: landscape) {
+    .unlock-container {
+      padding: 1rem;
+    }
+
+    .card {
+      max-width: 600px;
+      padding: 1.5rem;
+    }
+
+    h1 {
+      font-size: 1.5rem;
+    }
+
+    .tagline {
+      margin-bottom: 1rem;
+    }
+
+    form {
+      gap: 0.6rem;
+    }
+
+    footer {
+      margin-top: 1rem;
+    }
   }
 </style>

@@ -5,6 +5,54 @@
     <link rel="icon" href="%sveltekit.assets%/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Tauri + SvelteKit + Typescript App</title>
+    <style>
+      /* 全局滚动条样式 */
+      * {
+        scrollbar-width: thin;
+        scrollbar-color: rgba(148, 163, 184, 0.3) transparent;
+      }
+
+      /* Webkit 浏览器滚动条样式 */
+      *::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+
+      *::-webkit-scrollbar-track {
+        background: transparent;
+        border-radius: 10px;
+      }
+
+      *::-webkit-scrollbar-thumb {
+        background: rgba(148, 163, 184, 0.3);
+        border-radius: 10px;
+        transition: background 0.2s ease;
+      }
+
+      *::-webkit-scrollbar-thumb:hover {
+        background: rgba(148, 163, 184, 0.5);
+      }
+
+      *::-webkit-scrollbar-thumb:active {
+        background: rgba(148, 163, 184, 0.6);
+      }
+
+      /* 滚动条角落 */
+      *::-webkit-scrollbar-corner {
+        background: transparent;
+      }
+
+      /* 移动端隐藏滚动条但保留滚动功能 */
+      @media (max-width: 768px) {
+        * {
+          scrollbar-width: none;
+        }
+        
+        *::-webkit-scrollbar {
+          display: none;
+        }
+      }
+    </style>
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="hover">

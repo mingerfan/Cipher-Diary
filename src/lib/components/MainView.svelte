@@ -546,12 +546,35 @@
     gap: 1rem;
     background: rgba(15, 23, 42, 0.96);
     backdrop-filter: blur(6px);
+    overflow-y: auto;
+  }
+
+  /* 侧边栏滚动条样式 */
+  aside::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  aside::-webkit-scrollbar-track {
+    background: rgba(15, 23, 42, 0.3);
+    border-radius: 10px;
+    margin: 0.5rem 0;
+  }
+
+  aside::-webkit-scrollbar-thumb {
+    background: rgba(99, 102, 241, 0.3);
+    border-radius: 10px;
+  }
+
+  aside::-webkit-scrollbar-thumb:hover {
+    background: rgba(99, 102, 241, 0.5);
   }
 
   .header {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.75rem;
   }
 
   .location {
@@ -577,6 +600,9 @@
     font-size: 0.78rem;
     color: #94a3b8;
     word-break: break-all;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   h2 {
@@ -592,11 +618,17 @@
     border-radius: 10px;
     cursor: pointer;
     font-weight: 600;
-    transition: transform 0.15s ease;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    white-space: nowrap;
   }
 
   .primary:hover {
     transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+  }
+
+  .primary:active {
+    transform: translateY(0);
   }
 
   .search {
@@ -605,6 +637,14 @@
     border: 1px solid rgba(148, 163, 184, 0.3);
     background: rgba(15, 23, 42, 0.8);
     color: inherit;
+    width: 100%;
+    font-size: 0.95rem;
+  }
+
+  .search:focus {
+    outline: none;
+    border-color: rgba(99, 102, 241, 0.8);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25);
   }
 
   .entry-list {
@@ -615,6 +655,26 @@
     flex-direction: column;
     gap: 0.5rem;
     overflow-y: auto;
+    flex: 1;
+    padding-right: 0.25rem;
+  }
+
+  /* 日记列表滚动条样式 */
+  .entry-list::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .entry-list::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .entry-list::-webkit-scrollbar-thumb {
+    background: rgba(99, 102, 241, 0.25);
+    border-radius: 10px;
+  }
+
+  .entry-list::-webkit-scrollbar-thumb:hover {
+    background: rgba(99, 102, 241, 0.4);
   }
 
   .entry-list li {
@@ -630,13 +690,14 @@
     background: rgba(15, 23, 42, 0.6);
     border: 1px solid transparent;
     color: inherit;
-    transition: background 0.15s ease, border 0.15s ease;
+    transition: all 0.15s ease;
   }
 
   .entry-list li button:hover,
   .entry-list li button:focus-visible {
     border-color: rgba(99, 102, 241, 0.5);
     outline: none;
+    transform: translateX(2px);
   }
 
   .entry-list li.item-active button {
@@ -647,6 +708,9 @@
   .entry-list h3 {
     margin: 0;
     font-size: 1rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .entry-list p {
@@ -670,6 +734,26 @@
     gap: 1rem;
     background: radial-gradient(circle at top left, rgba(99, 102, 241, 0.18), transparent 55%),
       #0f172a;
+    overflow-y: auto;
+  }
+
+  /* 编辑器区域滚动条样式 */
+  .editor::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  .editor::-webkit-scrollbar-track {
+    background: rgba(15, 23, 42, 0.3);
+    border-radius: 10px;
+  }
+
+  .editor::-webkit-scrollbar-thumb {
+    background: rgba(99, 102, 241, 0.35);
+    border-radius: 10px;
+  }
+
+  .editor::-webkit-scrollbar-thumb:hover {
+    background: rgba(99, 102, 241, 0.5);
   }
 
   .editor-header {
@@ -677,16 +761,24 @@
     justify-content: space-between;
     align-items: flex-start;
     gap: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .editor-header > div:first-child {
+    flex: 1;
+    min-width: 200px;
   }
 
   .meta {
     color: #94a3b8;
     margin: 0.25rem 0 0;
+    font-size: 0.9rem;
   }
 
   .tools {
     display: flex;
     gap: 0.5rem;
+    flex-wrap: wrap;
   }
 
   .ghost,
@@ -697,7 +789,9 @@
     background: transparent;
     color: inherit;
     cursor: pointer;
-    transition: background 0.15s ease;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+    font-size: 0.9rem;
   }
 
   .ghost:disabled,
@@ -708,6 +802,11 @@
 
   .ghost:hover:not(:disabled) {
     background: rgba(148, 163, 184, 0.15);
+    transform: translateY(-1px);
+  }
+
+  .ghost:active:not(:disabled) {
+    transform: translateY(0);
   }
 
   .danger {
@@ -717,11 +816,18 @@
 
   .danger:hover:not(:disabled) {
     background: rgba(239, 68, 68, 0.12);
+    border-color: rgba(239, 68, 68, 0.8);
+    transform: translateY(-1px);
+  }
+
+  .danger:active:not(:disabled) {
+    transform: translateY(0);
   }
 
   .input-label {
     font-weight: 600;
     margin-top: 0.5rem;
+    font-size: 0.95rem;
   }
 
   .title-input,
@@ -734,6 +840,8 @@
     padding: 0.75rem 1rem;
     font-size: 1rem;
     transition: border 0.2s ease, box-shadow 0.2s ease;
+    font-family: inherit;
+    box-sizing: border-box;
   }
 
   .title-input:focus,
@@ -744,25 +852,31 @@
   }
 
   textarea {
-    min-height: 320px;
+    min-height: 280px;
     resize: vertical;
     line-height: 1.6;
   }
 
   .preview-card {
     margin-top: 1.5rem;
-    padding: 1.25rem;
+    padding: 0;
     border-radius: 16px;
     border: 1px solid rgba(148, 163, 184, 0.25);
     background: rgba(15, 23, 42, 0.55);
     backdrop-filter: blur(6px);
+    overflow: hidden;
+    box-sizing: border-box;
+    flex-shrink: 0;
   }
 
   .preview-header {
     display: flex;
     align-items: baseline;
     justify-content: space-between;
-    margin-bottom: 0.85rem;
+    margin-bottom: 0;
+    padding: 1.25rem 1.25rem 0.85rem;
+    flex-wrap: wrap;
+    gap: 0.5rem;
   }
 
   .preview-header h3 {
@@ -776,10 +890,30 @@
   }
 
   .preview-content {
-    min-height: 180px;
-    max-height: 400px;
+    min-height: 300px;
+    max-height: 600px;
     overflow-y: auto;
-    padding-right: 0.25rem;
+    padding: 0.85rem 1.25rem 1.25rem;
+    box-sizing: border-box;
+  }
+
+  /* 预览区域滚动条样式 */
+  .preview-content::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .preview-content::-webkit-scrollbar-track {
+    background: rgba(15, 23, 42, 0.2);
+    border-radius: 10px;
+  }
+
+  .preview-content::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.3);
+    border-radius: 10px;
+  }
+
+  .preview-content::-webkit-scrollbar-thumb:hover {
+    background: rgba(148, 163, 184, 0.5);
   }
 
   .preview-content :global(img) {
@@ -800,6 +934,8 @@
     color: #94a3b8;
     font-size: 0.9rem;
     margin-top: 0.5rem;
+    flex-wrap: wrap;
+    gap: 0.5rem;
   }
 
   .status {
@@ -826,17 +962,258 @@
     margin-bottom: 0.5rem;
   }
 
-  @media (max-width: 960px) {
+  /* 平板设备 */
+  @media (max-width: 1024px) {
+    .layout {
+      grid-template-columns: 280px 1fr;
+    }
+
+    aside {
+      padding: 1.25rem;
+    }
+
+    .editor {
+      padding: 1.5rem;
+    }
+
+    .tools {
+      width: 100%;
+      justify-content: flex-end;
+    }
+  }
+
+  /* 移动设备 - 大屏手机 */
+  @media (max-width: 768px) {
     .layout {
       grid-template-columns: 1fr;
-      grid-template-rows: 260px 1fr;
-      height: auto;
-      min-height: 100vh;
+      grid-template-rows: auto 1fr;
+      height: 100vh;
+      overflow: hidden;
     }
 
     aside {
       border-right: none;
       border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+      max-height: 45vh;
+      padding: 1rem;
+    }
+
+    .header h2 {
+      font-size: 1.1rem;
+    }
+
+    .location-path {
+      font-size: 0.75rem;
+    }
+
+    .entry-list {
+      max-height: none;
+    }
+
+    .editor {
+      padding: 1rem;
+      height: 55vh;
+    }
+
+    .editor-header {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .tools {
+      width: 100%;
+      justify-content: space-between;
+    }
+
+    .ghost,
+    .danger {
+      flex: 1;
+      text-align: center;
+      padding: 0.6rem 0.5rem;
+      font-size: 0.85rem;
+    }
+
+    textarea {
+      min-height: 200px;
+    }
+
+    .preview-card {
+      margin-top: 1rem;
+    }
+
+    .preview-header {
+      padding: 1rem 1rem 0.75rem;
+    }
+
+    .preview-content {
+      min-height: 250px;
+      max-height: 450px;
+      padding: 0.75rem 1rem 1rem;
+    }
+  }
+
+  /* 移动设备 - 小屏手机 */
+  @media (max-width: 480px) {
+    aside {
+      padding: 0.75rem;
+      max-height: 40vh;
+    }
+
+    .header {
+      gap: 0.5rem;
+    }
+
+    .header h2 {
+      font-size: 1rem;
+    }
+
+    .primary {
+      padding: 0.45rem 0.75rem;
+      font-size: 0.9rem;
+    }
+
+    .search {
+      padding: 0.55rem 0.75rem;
+      font-size: 0.9rem;
+    }
+
+    .entry-list li button {
+      padding: 0.7rem 0.75rem;
+    }
+
+    .entry-list h3 {
+      font-size: 0.95rem;
+    }
+
+    .entry-list p {
+      font-size: 0.78rem;
+    }
+
+    .editor {
+      padding: 0.75rem;
+      gap: 0.75rem;
+    }
+
+    .meta {
+      font-size: 0.8rem;
+    }
+
+    .tools {
+      gap: 0.4rem;
+    }
+
+    .ghost,
+    .danger {
+      padding: 0.5rem 0.4rem;
+      font-size: 0.8rem;
+    }
+
+    .input-label {
+      font-size: 0.9rem;
+    }
+
+    .title-input,
+    textarea {
+      padding: 0.65rem 0.85rem;
+      font-size: 0.95rem;
+    }
+
+    textarea {
+      min-height: 150px;
+    }
+
+    .preview-card {
+      margin-top: 0.75rem;
+    }
+
+    .preview-header {
+      padding: 0.85rem 0.85rem 0.65rem;
+    }
+
+    .preview-header h3 {
+      font-size: 1rem;
+    }
+
+    .hint-text {
+      font-size: 0.75rem;
+    }
+
+    .preview-content {
+      min-height: 180px;
+      max-height: 350px;
+      padding: 0.65rem 0.85rem 0.85rem;
+    }
+
+    .footer-row {
+      font-size: 0.82rem;
+    }
+  }
+
+  /* 超小屏设备 */
+  @media (max-width: 360px) {
+    aside {
+      padding: 0.5rem;
+    }
+
+    .location {
+      padding: 0.5rem 0.6rem;
+    }
+
+    .editor {
+      padding: 0.5rem;
+    }
+
+    .preview-header {
+      padding: 0.65rem 0.65rem 0.5rem;
+    }
+
+    .preview-content {
+      padding: 0.5rem 0.65rem 0.65rem;
+    }
+
+    .tools button {
+      padding: 0.4rem 0.3rem;
+      font-size: 0.75rem;
+    }
+  }
+
+  /* 横屏模式优化 */
+  @media (max-width: 768px) and (orientation: landscape) {
+    .layout {
+      grid-template-columns: 240px 1fr;
+      grid-template-rows: 1fr;
+    }
+
+    aside {
+      border-right: 1px solid rgba(148, 163, 184, 0.2);
+      border-bottom: none;
+      max-height: 100vh;
+    }
+
+    .editor {
+      height: 100vh;
+    }
+  }
+
+  /* 触摸设备优化 */
+  @media (hover: none) and (pointer: coarse) {
+    .primary,
+    .ghost,
+    .danger,
+    .entry-list li button,
+    .search,
+    .title-input,
+    textarea {
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .entry-list li button {
+      padding: 1rem 0.9rem;
+    }
+
+    .ghost,
+    .danger {
+      padding: 0.65rem 1rem;
     }
   }
 </style>
