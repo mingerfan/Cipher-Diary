@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
+  import { createEventDispatcher, onMount } from 'svelte';
+  import { get } from 'svelte/store';
   import { pickVaultDirectory, unlockVault } from '../api';
   import {
     activeEntryDetail,
@@ -20,6 +21,10 @@
   let busy = false;
   let error: string | null = null;
   let selectedDirectory: string | null = null;
+
+  onMount(() => {
+    selectedDirectory = get(vaultRoot);
+  });
 
   function toggleConfirmation(event: Event) {
     const target = event.target as HTMLInputElement;
@@ -63,9 +68,9 @@
     try {
       const response: UnlockResponse = await unlockVault(passphrase, selectedDirectory);
       entries.set(response.entries);
-      lastSaved.set(response.last_saved ?? null);
-      vaultRoot.set(response.vault_root);
-  activeEntryDetail.set(null);
+    lastSaved.set(response.last_saved ?? null);
+    vaultRoot.set(response.vault_root);
+    activeEntryDetail.set(null);
       unlocked.set(true);
       activeEntryId.set(response.entries[0]?.id ?? null);
       statusMessage.set(response.created ? '新的日记库已创建' : '日记库已解锁');
