@@ -125,6 +125,19 @@ fn store_image(path: String, state: State<AppState>) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn store_image_from_bytes(
+    name: Option<String>,
+    mime: Option<String>,
+    data: Vec<u8>,
+    state: State<AppState>,
+) -> Result<String, String> {
+    state
+        .manager
+        .store_image_bytes(name, mime, data)
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
 fn export_plaintext_file(state: State<AppState>) -> Result<String, String> {
     let content = state
         .manager
@@ -164,6 +177,7 @@ pub fn run() {
             delete_entry,
             export_plaintext,
             store_image,
+            store_image_from_bytes,
             export_plaintext_file
         ])
         .run(tauri::generate_context!())

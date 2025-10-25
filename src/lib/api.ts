@@ -38,6 +38,19 @@ export async function importVaultImage(path: string): Promise<string> {
   return invoke<string>('store_image', { path });
 }
 
+export async function importClipboardImage(options: {
+  name?: string | null;
+  mime?: string | null;
+  data: Uint8Array;
+}): Promise<string> {
+  const { name = null, mime = null, data } = options;
+  return invoke<string>('store_image_from_bytes', {
+    name,
+    mime,
+    data: Array.from(data)
+  });
+}
+
 export async function pickVaultDirectory(): Promise<string | null> {
   const selection = await open({
     directory: true,

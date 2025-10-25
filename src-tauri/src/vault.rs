@@ -295,32 +295,34 @@ impl VaultManager {
             return Err(anyhow!("选定的图片不存在"));
         }
 
-        let now = OffsetDateTime::now_utc();
-        let year = now.year();
-    let month: u8 = now.month().into();
-
-        let mut target_dir = vault.attachments_dir.clone();
-        target_dir.push(year.to_string());
-        target_dir.push(format!("{:02}", month));
-        fs::create_dir_all(&target_dir).context("failed to prepare attachment directory")?;
-
         let extension = source
             .extension()
             .and_then(|ext| ext.to_str())
+            .map(|ext| ext.trim_start_matches('.'))
+            .filter(|ext| !ext.is_empty())
             .unwrap_or("bin");
-        let filename = format!("{id}.{ext}", id = Uuid::new_v4(), ext = extension);
-        let target_path = target_dir.join(filename);
+        let (target_path, relative) = attachment_target(vault, extension)?;
         fs::copy(&source, &target_path).context("无法复制图片文件")?;
 
-        let root = vault
-            .path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| vault.path.clone());
-        let relative = target_path
-            .strip_prefix(&root)
-            .unwrap_or(&target_path)
-            .to_path_buf();
+        Ok(display_path(&relative))
+    }
+
+    pub fn store_image_bytes(
+        &self,
+        name: Option<String>,
+        mime: Option<String>,
+        data: Vec<u8>,
+    ) -> Result<String> {
+        let mut guard = self.inner.lock();
+        let vault = guard.as_mut().ok_or_else(|| anyhow!("vault is locked"))?;
+
+        if data.is_empty() {
+            return Err(anyhow!("粘贴的图像为空"));
+        }
+
+        let extension = infer_image_extension(name.as_deref(), mime.as_deref());
+        let (target_path, relative) = attachment_target(vault, &extension)?;
+        fs::write(&target_path, data).context("无法写入图片数据")?;
 
         Ok(display_path(&relative))
     }
@@ -513,4 +515,60 @@ fn display_path(path: &Path) -> String {
 pub fn vault_file_path(mut base: PathBuf) -> PathBuf {
     base.push("vault.json");
     base
+}
+
+fn attachment_target(vault: &UnlockedVault, extension: &str) -> Result<(PathBuf, PathBuf)> {
+    let now = OffsetDateTime::now_utc();
+    let year = now.year();
+    let month: u8 = now.month().into();
+
+    let mut target_dir = vault.attachments_dir.clone();
+    target_dir.push(year.to_string());
+    target_dir.push(format!("{:02}", month));
+    fs::create_dir_all(&target_dir).context("failed to prepare attachment directory")?;
+
+    let ext = if extension.is_empty() { "bin" } else { extension };
+    let filename = format!("{id}.{ext}", id = Uuid::new_v4(), ext = ext);
+    let target_path = target_dir.join(filename);
+
+    let root = vault
+        .path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| vault.path.clone());
+    let relative = target_path
+        .strip_prefix(&root)
+        .unwrap_or(&target_path)
+        .to_path_buf();
+
+    Ok((target_path, relative))
+}
+
+fn infer_image_extension(name: Option<&str>, mime: Option<&str>) -> String {
+    if let Some(name) = name {
+        if let Some(ext) = Path::new(name)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.trim_start_matches('.'))
+        {
+            let lowered = ext.to_ascii_lowercase();
+            if !lowered.is_empty() {
+                return lowered;
+            }
+        }
+    }
+
+    if let Some(mime) = mime {
+        match mime.to_ascii_lowercase().as_str() {
+            "image/png" => return "png".into(),
+            "image/jpeg" | "image/jpg" => return "jpg".into(),
+            "image/gif" => return "gif".into(),
+            "image/webp" => return "webp".into(),
+            "image/bmp" => return "bmp".into(),
+            "image/svg+xml" => return "svg".into(),
+            _ => {}
+        }
+    }
+
+    "bin".into()
 }

@@ -18,7 +18,8 @@
     deleteVaultEntry,
     exportVaultToFile,
     fetchEntries,
-    importVaultImage,
+  importClipboardImage,
+  importVaultImage,
     loadVaultEntry,
     lockVault,
     pickImageFile,
@@ -231,6 +232,41 @@
     }
   }
 
+  async function handlePaste(event: ClipboardEvent) {
+    const detail = get(activeEntryDetail);
+    if (!detail) return;
+    const clipboard = event.clipboardData;
+    if (!clipboard) return;
+
+    const items = Array.from(clipboard.items ?? []);
+    const imageItem = items.find((item) => item.kind === 'file' && item.type.startsWith('image/'));
+    if (!imageItem) {
+      return;
+    }
+
+    const file = imageItem.getAsFile();
+    if (!file) {
+      return;
+    }
+
+    event.preventDefault();
+    try {
+      const buffer = new Uint8Array(await file.arrayBuffer());
+      const storedPath = await importClipboardImage({
+        name: file.name || null,
+        mime: file.type || null,
+        data: buffer
+      });
+      const normalized = storedPath.replace(/\\/g, '/');
+      const altText = file.name ? file.name.replace(/\.[^.]+$/, '') : '粘贴的图片';
+      insertAtCursor(`\n\n![${altText}](${normalized})\n\n`);
+      saveError = null;
+      statusMessage.set('已粘贴图片');
+    } catch (err) {
+      saveError = err instanceof Error ? err.message : '粘贴图片失败';
+    }
+  }
+
   function insertAtCursor(snippet: string) {
     if (!editorTextarea) {
       localContent = `${localContent}${snippet}`;
@@ -386,6 +422,7 @@
         bind:this={editorTextarea}
         bind:value={localContent}
         on:input={scheduleSave}
+        on:paste={handlePaste}
         placeholder="开始记录你的每一天…"
       ></textarea>
 
