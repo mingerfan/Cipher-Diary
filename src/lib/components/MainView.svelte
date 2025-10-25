@@ -719,6 +719,14 @@
     padding-right: 0.25rem;
   }
 
+  .preview-content :global(img) {
+    max-width: 100%;
+    height: auto;
+    border-radius: 8px;
+    margin: 0.5rem 0;
+    display: block;
+  }
+
   .preview-content.empty-preview {
     color: #94a3b8;
   }
