@@ -19,6 +19,7 @@
     updateVaultEntry
   } from '../api';
   import type { Entry } from '../types';
+  import { marked } from 'marked';
 
   let localTitle = '';
   let localContent = '';
@@ -69,6 +70,8 @@
     localTitle = currentEntry.title;
     localContent = currentEntry.content;
   }
+
+  $: previewHtml = marked.parse(localContent || '');
 
   async function handleCreate() {
     try {
@@ -242,6 +245,20 @@
         on:input={scheduleSave}
         placeholder="开始记录你的每一天…"
       ></textarea>
+
+      <div class="preview-card">
+        <div class="preview-header">
+          <h3>预览</h3>
+          <span class="hint-text">Markdown 渲染仅在本地执行</span>
+        </div>
+        <div class="preview-content" class:empty-preview={!localContent}>
+          {#if localContent.trim().length === 0}
+            <em>暂无内容，开始书写后这里会实时预览 Markdown。</em>
+          {:else}
+            <article class="markdown">{@html previewHtml}</article>
+          {/if}
+        </div>
+      </div>
 
       <div class="footer-row">
         <span class="status">
@@ -454,6 +471,87 @@
     min-height: 320px;
     resize: vertical;
     line-height: 1.6;
+  }
+
+  .preview-card {
+    margin-top: 1.5rem;
+    padding: 1.25rem;
+    border-radius: 16px;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    background: rgba(15, 23, 42, 0.55);
+    backdrop-filter: blur(6px);
+  }
+
+  .preview-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 0.85rem;
+  }
+
+  .preview-header h3 {
+    margin: 0;
+    font-size: 1.1rem;
+  }
+
+  .hint-text {
+    color: #94a3b8;
+    font-size: 0.8rem;
+  }
+
+  .preview-content {
+    min-height: 180px;
+    max-height: 400px;
+    overflow-y: auto;
+    padding-right: 0.25rem;
+  }
+
+  .preview-content.empty-preview {
+    color: #94a3b8;
+  }
+
+  :global(.markdown) h1,
+  :global(.markdown) h2,
+  :global(.markdown) h3,
+  :global(.markdown) h4,
+  :global(.markdown) h5,
+  :global(.markdown) h6 {
+    margin: 1.2rem 0 0.6rem;
+    font-weight: 600;
+  }
+
+  :global(.markdown) p {
+    margin: 0.75rem 0;
+    line-height: 1.7;
+  }
+
+  :global(.markdown) ul,
+  :global(.markdown) ol {
+    padding-left: 1.4rem;
+    margin: 0.75rem 0;
+  }
+
+  :global(.markdown) code {
+    background: rgba(15, 23, 42, 0.8);
+    padding: 0.1rem 0.35rem;
+    border-radius: 6px;
+    font-family: 'Fira Code', Consolas, monospace;
+    font-size: 0.92rem;
+  }
+
+  :global(.markdown) pre {
+    background: rgba(15, 23, 42, 0.8);
+    padding: 0.75rem 1rem;
+    border-radius: 12px;
+    overflow-x: auto;
+    margin: 1rem 0;
+  }
+
+  :global(.markdown) blockquote {
+    margin: 0.9rem 0;
+    padding-left: 1rem;
+    border-left: 3px solid rgba(99, 102, 241, 0.5);
+    color: #cbd5f5;
   }
 
   .footer-row {
