@@ -1,7 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import { unlockVault } from '../api';
-  import { activeEntryId, entries, lastSaved, statusMessage, unlocked } from '../stores/vault';
+  import { pickVaultDirectory, unlockVault } from '../api';
+  import { activeEntryId, entries, lastSaved, statusMessage, unlocked, vaultRoot } from '../stores/vault';
   import type { UnlockResponse } from '../types';
 
   const dispatch = createEventDispatcher<{ unlocked: { created: boolean } }>();
@@ -11,6 +11,7 @@
   let requireConfirmation = false;
   let busy = false;
   let error: string | null = null;
+  let selectedDirectory: string | null = null;
 
   function toggleConfirmation(event: Event) {
     const target = event.target as HTMLInputElement;
@@ -18,6 +19,22 @@
     if (!requireConfirmation) {
       confirm = '';
     }
+  }
+
+  async function chooseDirectory() {
+    try {
+      const result = await pickVaultDirectory();
+      if (result) {
+        selectedDirectory = result;
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '无法打开文件夹选择器';
+      error = message;
+    }
+  }
+
+  function clearDirectory() {
+    selectedDirectory = null;
   }
 
   async function handleSubmit(event: Event) {
@@ -36,13 +53,15 @@
 
     busy = true;
     try {
-      const response: UnlockResponse = await unlockVault(passphrase);
+      const response: UnlockResponse = await unlockVault(passphrase, selectedDirectory);
       entries.set(response.entries);
       lastSaved.set(response.last_saved ?? null);
+      vaultRoot.set(response.vault_root);
       unlocked.set(true);
       activeEntryId.set(response.entries[0]?.id ?? null);
       statusMessage.set(response.created ? '新的日记库已创建' : '日记库已解锁');
       dispatch('unlocked', { created: response.created });
+      selectedDirectory = null;
     } catch (err) {
       const message = err instanceof Error ? err.message : '无法解锁日记库';
       error = message.includes('decryption failed') ? '密码短语错误，请重试' : message;
@@ -90,6 +109,27 @@
       {#if error}
         <div class="error">{error}</div>
       {/if}
+
+      <div class="directory-picker">
+        <p class="directory-label">存储文件夹（可选）</p>
+        <p class="directory-hint">
+          {#if selectedDirectory}
+            {selectedDirectory}
+          {:else}
+            未选择时将保存在应用数据目录中
+          {/if}
+        </p>
+        <div class="picker-actions">
+          <button type="button" class="secondary" on:click={chooseDirectory} disabled={busy}>
+            选择文件夹
+          </button>
+          {#if selectedDirectory}
+            <button type="button" class="ghost" on:click={clearDirectory} disabled={busy}>
+              使用默认位置
+            </button>
+          {/if}
+        </div>
+      </div>
 
       <button type="submit" disabled={busy}>
         {#if busy}
@@ -180,7 +220,7 @@
     height: 18px;
   }
 
-  button {
+  button[type='submit'] {
     margin-top: 1rem;
     padding: 0.85rem 1.25rem;
     border-radius: 12px;
@@ -193,14 +233,73 @@
     transition: transform 0.15s ease, box-shadow 0.15s ease;
   }
 
-  button:disabled {
+  button[type='submit']:disabled {
     opacity: 0.7;
     cursor: wait;
   }
 
-  button:not(:disabled):hover {
+  button[type='submit']:not(:disabled):hover {
     transform: translateY(-1px);
     box-shadow: 0 15px 40px rgba(99, 102, 241, 0.35);
+  }
+
+  .directory-picker {
+    margin-top: 0.75rem;
+    padding: 1rem;
+    border-radius: 12px;
+    background: rgba(15, 23, 42, 0.55);
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+  }
+
+  .directory-label {
+    margin: 0;
+    font-weight: 600;
+    font-size: 0.95rem;
+  }
+
+  .directory-hint {
+    margin: 0;
+    font-size: 0.85rem;
+    color: #cbd5f5;
+    word-break: break-all;
+  }
+
+  .picker-actions {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+
+  .secondary,
+  .ghost {
+    padding: 0.55rem 0.95rem;
+    border-radius: 10px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.15s ease;
+  }
+
+  .secondary {
+    border: none;
+    background: linear-gradient(135deg, #38bdf8, #6366f1);
+    color: #0f172a;
+  }
+
+  .secondary:hover {
+    transform: translateY(-1px);
+  }
+
+  .ghost {
+    background: transparent;
+    border: 1px solid rgba(148, 163, 184, 0.4);
+    color: #cbd5f5;
+  }
+
+  .ghost:hover {
+    background: rgba(148, 163, 184, 0.15);
   }
 
   .error {

@@ -8,7 +8,8 @@
     lastSaved,
     searchTerm,
     statusMessage,
-    unlocked
+    unlocked,
+    vaultRoot
   } from '../stores/vault';
   import {
     createVaultEntry,
@@ -169,6 +170,7 @@
     localTitle = '';
     localContent = '';
     statusMessage.set('已锁定');
+    vaultRoot.set(null);
   }
 
   onDestroy(() => {
@@ -187,6 +189,12 @@
     <div class="header">
       <h2>日记列表</h2>
       <button class="primary" on:click={handleCreate}>新建</button>
+    </div>
+    <div class="location">
+      <span class="location-label">📁 存储目录</span>
+      <span class="location-path" title={$vaultRoot ?? '应用数据目录（默认）'}>
+        {$vaultRoot ?? '应用数据目录（默认）'}
+      </span>
     </div>
     <input
       class="search"
@@ -307,6 +315,31 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+  }
+
+  .location {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    padding: 0.6rem 0.75rem;
+    border-radius: 10px;
+    background: rgba(15, 23, 42, 0.55);
+    border: 1px solid rgba(148, 163, 184, 0.3);
+  }
+
+  .location-label {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: #cbd5f5;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+
+  .location-path {
+    font-size: 0.78rem;
+    color: #94a3b8;
+    word-break: break-all;
   }
 
   h2 {

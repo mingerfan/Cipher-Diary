@@ -7,6 +7,7 @@ export const activeEntryId = writable<string | null>(null);
 export const searchTerm = writable('');
 export const lastSaved = writable<string | null>(null);
 export const statusMessage = writable<string | null>(null);
+export const vaultRoot = writable<string | null>(null);
 
 export const filteredEntries = derived([entries, searchTerm], ([items, term]) => {
   if (!term.trim()) {

@@ -1,8 +1,9 @@
 import { invoke } from '@tauri-apps/api/core';
+import { open } from '@tauri-apps/plugin-dialog';
 import type { Entry, UnlockResponse } from './types';
 
-export async function unlockVault(passphrase: string): Promise<UnlockResponse> {
-  return invoke<UnlockResponse>('unlock_vault', { passphrase });
+export async function unlockVault(passphrase: string, directory?: string | null): Promise<UnlockResponse> {
+  return invoke<UnlockResponse>('unlock_vault', { passphrase, directory: directory ?? undefined });
 }
 
 export async function lockVault(): Promise<void> {
@@ -27,4 +28,18 @@ export async function deleteVaultEntry(id: string): Promise<void> {
 
 export async function exportVaultToFile(): Promise<string> {
   return invoke<string>('export_plaintext_file');
+}
+
+export async function pickVaultDirectory(): Promise<string | null> {
+  const selection = await open({
+    directory: true,
+    multiple: false,
+    title: '选择日记存储文件夹'
+  });
+
+  if (Array.isArray(selection)) {
+    return selection[0] ?? null;
+  }
+
+  return typeof selection === 'string' ? selection : null;
 }

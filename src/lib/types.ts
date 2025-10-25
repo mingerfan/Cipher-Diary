@@ -10,4 +10,5 @@ export interface UnlockResponse {
   entries: Entry[];
   created: boolean;
   last_saved?: string | null;
+  vault_root: string;
 }

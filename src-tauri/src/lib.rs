@@ -3,7 +3,8 @@ mod vault;
 use std::fs;
 use std::path::PathBuf;
 
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
+use tauri::Manager;
 use time::macros::format_description;
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -15,21 +16,37 @@ struct AppState {
     manager: VaultManager,
 }
 
-fn resolve_vault_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let base = app
-        .path()
-        .app_local_data_dir()
-        .map_err(|err| format!("failed to resolve app data dir: {err}"))?;
+fn resolve_vault_path(app: &AppHandle, directory: Option<String>) -> Result<PathBuf, String> {
+    let base = if let Some(dir) = directory {
+        let trimmed = dir.trim();
+        if trimmed.is_empty() {
+            return Err("所选目录无效".to_string());
+        }
+        let path = PathBuf::from(trimmed);
+        if path.is_file() {
+            return Err("所选路径不是文件夹".to_string());
+        }
+        fs::create_dir_all(&path)
+            .map_err(|err| format!("无法创建所选目录: {err}"))?;
+        path
+    } else {
+        app
+            .path()
+            .app_local_data_dir()
+            .map_err(|err| format!("failed to resolve app data dir: {err}"))?
+    };
+
     Ok(vault_file_path(base))
 }
 
 #[tauri::command]
 fn unlock_vault(
     passphrase: String,
+    directory: Option<String>,
     app: AppHandle,
     state: State<AppState>,
 ) -> Result<UnlockResponse, String> {
-    let path = resolve_vault_path(&app)?;
+    let path = resolve_vault_path(&app, directory)?;
     state
         .manager
         .unlock(&passphrase, path)
@@ -86,7 +103,7 @@ fn export_plaintext(state: State<AppState>) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn export_plaintext_file(app: AppHandle, state: State<AppState>) -> Result<String, String> {
+fn export_plaintext_file(state: State<AppState>) -> Result<String, String> {
     let content = state
         .manager
         .export_plaintext()
@@ -96,10 +113,10 @@ fn export_plaintext_file(app: AppHandle, state: State<AppState>) -> Result<Strin
     let now = OffsetDateTime::now_utc();
     let suggested = format!("diary-{}.md", now.format(&date_fmt).unwrap_or_else(|_| "today".into()));
 
-    let mut export_dir = app
-        .path()
-        .app_local_data_dir()
-        .map_err(|err| format!("failed to resolve app data dir: {err}"))?;
+    let mut export_dir = state
+        .manager
+        .vault_root()
+        .map_err(|err| err.to_string())?;
     export_dir.push("exports");
     fs::create_dir_all(&export_dir).map_err(|err| err.to_string())?;
 
@@ -113,6 +130,7 @@ fn export_plaintext_file(app: AppHandle, state: State<AppState>) -> Result<Strin
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             unlock_vault,

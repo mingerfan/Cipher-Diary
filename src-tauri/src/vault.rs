@@ -7,7 +7,7 @@ use parking_lot::Mutex;
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use uuid::Uuid;
 
@@ -44,6 +44,7 @@ pub struct UnlockResponse {
     pub entries: Vec<Entry>,
     pub created: bool,
     pub last_saved: Option<String>,
+    pub vault_root: String,
 }
 
 #[derive(Default)]
@@ -68,10 +69,18 @@ impl VaultManager {
                 last_saved: OffsetDateTime::now_utc(),
             };
 
+            let root_path = unlocked
+                .path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| unlocked.path.clone());
+            let root_string = root_path.to_string_lossy().into_owned();
+
             let response = UnlockResponse {
                 entries: Vec::new(),
                 created: true,
                 last_saved: unlocked.last_saved.format(&Rfc3339).ok(),
+                vault_root: root_string,
             };
 
             *self.inner.lock() = Some(unlocked);
@@ -98,17 +107,21 @@ impl VaultManager {
         let unlocked = UnlockedVault {
             key,
             salt,
-                entries: entries.clone(),
+            entries: entries.clone(),
             path: vault_path,
             last_saved: stored.updated_at.unwrap_or_else(OffsetDateTime::now_utc),
         };
 
         *self.inner.lock() = Some(unlocked);
 
+        let root_path = self.vault_root()?;
+        let root_string = root_path.to_string_lossy().into_owned();
+
         Ok(UnlockResponse {
             entries,
             created: false,
             last_saved,
+            vault_root: root_string,
         })
     }
 
@@ -127,7 +140,7 @@ impl VaultManager {
     pub fn create_entry(&self, title: &str, content: &str) -> Result<Entry> {
         let mut guard = self.inner.lock();
         let vault = guard.as_mut().ok_or_else(|| anyhow!("vault is locked"))?;
-    let entry = Entry::new(title, content);
+        let entry = Entry::new(title, content);
         vault.entries.push(entry.clone());
         save_current(vault)?;
         Ok(entry)
@@ -184,6 +197,16 @@ impl VaultManager {
             ));
         }
         Ok(lines.join("\n---\n\n"))
+    }
+
+    pub fn vault_root(&self) -> Result<PathBuf> {
+        let guard = self.inner.lock();
+        let vault = guard.as_ref().ok_or_else(|| anyhow!("vault is locked"))?;
+        Ok(vault
+            .path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| vault.path.clone()))
     }
 }
 
