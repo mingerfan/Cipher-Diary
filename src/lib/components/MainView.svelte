@@ -40,6 +40,21 @@
 
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let loadedEntryId: string | null = null;
+  
+  // 视图切换状态: 'list' | 'editor'
+  let currentView: 'list' | 'editor' = 'list';
+  
+  // 检测屏幕尺寸
+  let isLargeScreen = true;
+  
+  function updateScreenSize() {
+    isLargeScreen = window.innerWidth > 768;
+  }
+  
+  onMount(() => {
+    updateScreenSize();
+    window.addEventListener('resize', updateScreenSize);
+  });
 
   const formatDate = (value: string | null | undefined) => {
     if (!value) return '—';
@@ -108,7 +123,13 @@
   }
 
   function selectEntry(id: string) {
-    if (id === get(activeEntryId)) return;
+    if (id === get(activeEntryId)) {
+      // 如果是小屏设备，切换到编辑器视图
+      if (!isLargeScreen) {
+        currentView = 'editor';
+      }
+      return;
+    }
     if (debounceTimer) {
       clearTimeout(debounceTimer);
       debounceTimer = null;
@@ -121,6 +142,10 @@
     saveError = null;
     statusMessage.set('');
     void loadEntryDetail(id);
+    // 小屏设备自动切换到编辑器视图
+    if (!isLargeScreen) {
+      currentView = 'editor';
+    }
   }
 
   function scheduleSave() {
@@ -409,10 +434,19 @@
   $: if (localContent || $vaultRoot) {
     void renderPreview(localContent, $vaultRoot);
   }
+  
+  // 清理事件监听
+  onDestroy(() => {
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('resize', updateScreenSize);
+    }
+  });
 </script>
 
-<div class="layout">
-  <aside>
+<div class="app-container" class:large-screen={isLargeScreen}>
+  <div class="layout">
+    <!-- 日记列表视图 -->
+    <aside class:hidden={!isLargeScreen && currentView !== 'list'}>
     <div class="header">
       <h2>日记列表</h2>
       <button class="primary" on:click={handleCreate}>新建</button>
@@ -447,7 +481,8 @@
     {/if}
   </aside>
 
-  <section class="editor">
+  <!-- 编辑器视图 -->
+  <section class="editor" class:hidden={!isLargeScreen && currentView !== 'editor'}>
     {#if loadingEntry && !currentDetail}
       <div class="empty">
         <h2>正在加载</h2>
@@ -527,15 +562,114 @@
       </div>
     {/if}
   </section>
+  </div>
+
+  <!-- 小屏：底部导航 -->
+  {#if !isLargeScreen}
+    <nav class="bottom-nav">
+      <button 
+        class="nav-item" 
+        class:active={currentView === 'list'}
+        on:click={() => currentView = 'list'}
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="8" y1="6" x2="21" y2="6"></line>
+          <line x1="8" y1="12" x2="21" y2="12"></line>
+          <line x1="8" y1="18" x2="21" y2="18"></line>
+          <line x1="3" y1="6" x2="3.01" y2="6"></line>
+          <line x1="3" y1="12" x2="3.01" y2="12"></line>
+          <line x1="3" y1="18" x2="3.01" y2="18"></line>
+        </svg>
+        <span>列表</span>
+      </button>
+      <button 
+        class="nav-item" 
+        class:active={currentView === 'editor'}
+        on:click={() => currentView = 'editor'}
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+        </svg>
+        <span>编辑</span>
+      </button>
+    </nav>
+  {/if}
 </div>
 
 <style>
-  .layout {
-    display: grid;
-    grid-template-columns: 320px 1fr;
+  .app-container {
+    display: flex;
+    flex-direction: column;
     height: 100vh;
     background: #0f172a;
     color: #e2e8f0;
+  }
+
+  /* 底部导航栏（小屏） */
+  .bottom-nav {
+    height: 64px;
+    background: rgba(15, 23, 42, 0.98);
+    border-top: 1px solid rgba(148, 163, 184, 0.2);
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    padding: 0 1rem;
+    backdrop-filter: blur(10px);
+    flex-shrink: 0;
+  }
+
+  .bottom-nav .nav-item {
+    flex: 1;
+    max-width: 120px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.6rem;
+    border-radius: 10px;
+    background: transparent;
+    border: none;
+    color: #94a3b8;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-size: 0.75rem;
+    font-weight: 500;
+  }
+
+  .bottom-nav .nav-item:hover {
+    background: rgba(99, 102, 241, 0.1);
+    color: #c7d2fe;
+  }
+
+  .bottom-nav .nav-item.active {
+    background: rgba(99, 102, 241, 0.15);
+    color: #a5b4fc;
+  }
+
+  .bottom-nav .nav-item svg {
+    width: 24px;
+    height: 24px;
+  }
+
+  .layout {
+    flex: 1;
+    display: grid;
+    overflow: hidden;
+  }
+
+  .app-container.large-screen .layout {
+    grid-template-columns: 320px 1fr;
+    height: 100vh;
+  }
+
+  .app-container:not(.large-screen) .layout {
+    grid-template-columns: 1fr;
+    height: calc(100vh - 64px);
+  }
+
+  .hidden {
+    display: none !important;
   }
 
   aside {
@@ -547,6 +681,12 @@
     background: rgba(15, 23, 42, 0.96);
     backdrop-filter: blur(6px);
     overflow-y: auto;
+    height: 100%;
+  }
+
+  .app-container:not(.large-screen) aside {
+    border-right: none;
+    height: 100%;
   }
 
   /* 侧边栏滚动条样式 */
@@ -735,6 +875,7 @@
     background: radial-gradient(circle at top left, rgba(99, 102, 241, 0.18), transparent 55%),
       #0f172a;
     overflow-y: auto;
+    height: 100%;
   }
 
   /* 编辑器区域滚动条样式 */
@@ -964,7 +1105,7 @@
 
   /* 平板设备 */
   @media (max-width: 1024px) {
-    .layout {
+    .large-screen .layout {
       grid-template-columns: 280px 1fr;
     }
 
@@ -982,19 +1123,13 @@
     }
   }
 
-  /* 移动设备 - 大屏手机 */
+  /* 小屏设备调整 */
   @media (max-width: 768px) {
-    .layout {
-      grid-template-columns: 1fr;
-      grid-template-rows: auto 1fr;
-      height: 100vh;
-      overflow: hidden;
+    aside {
+      padding: 1rem;
     }
 
-    aside {
-      border-right: none;
-      border-bottom: 1px solid rgba(148, 163, 184, 0.2);
-      max-height: 45vh;
+    .editor {
       padding: 1rem;
     }
 
@@ -1004,15 +1139,6 @@
 
     .location-path {
       font-size: 0.75rem;
-    }
-
-    .entry-list {
-      max-height: none;
-    }
-
-    .editor {
-      padding: 1rem;
-      height: 55vh;
     }
 
     .editor-header {
@@ -1056,7 +1182,6 @@
   @media (max-width: 480px) {
     aside {
       padding: 0.75rem;
-      max-height: 40vh;
     }
 
     .header {
@@ -1174,24 +1299,6 @@
     .tools button {
       padding: 0.4rem 0.3rem;
       font-size: 0.75rem;
-    }
-  }
-
-  /* 横屏模式优化 */
-  @media (max-width: 768px) and (orientation: landscape) {
-    .layout {
-      grid-template-columns: 240px 1fr;
-      grid-template-rows: 1fr;
-    }
-
-    aside {
-      border-right: 1px solid rgba(148, 163, 184, 0.2);
-      border-bottom: none;
-      max-height: 100vh;
-    }
-
-    .editor {
-      height: 100vh;
     }
   }
 
