@@ -47,13 +47,32 @@
   // 检测屏幕尺寸
   let isLargeScreen = true;
   
+  // 大屏幕侧边栏折叠状态（从localStorage读取）
+  let sidebarCollapsed = false;
+  
   function updateScreenSize() {
     isLargeScreen = window.innerWidth > 768;
+  }
+  
+  function toggleSidebar() {
+    sidebarCollapsed = !sidebarCollapsed;
+    // 保存到localStorage
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('diary-sidebar-collapsed', String(sidebarCollapsed));
+    }
   }
   
   onMount(() => {
     updateScreenSize();
     window.addEventListener('resize', updateScreenSize);
+    
+    // 从localStorage读取侧边栏状态
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('diary-sidebar-collapsed');
+      if (saved !== null) {
+        sidebarCollapsed = saved === 'true';
+      }
+    }
   });
 
   const formatDate = (value: string | null | undefined) => {
@@ -444,9 +463,9 @@
 </script>
 
 <div class="app-container" class:large-screen={isLargeScreen}>
-  <div class="layout">
+  <div class="layout" class:sidebar-collapsed={isLargeScreen && sidebarCollapsed}>
     <!-- 日记列表视图 -->
-    <aside class:hidden={!isLargeScreen && currentView !== 'list'}>
+    <aside class:hidden={(!isLargeScreen && currentView !== 'list') || (isLargeScreen && sidebarCollapsed)}>
     <div class="header">
       <h2>日记列表</h2>
       <button class="primary" on:click={handleCreate}>新建</button>
@@ -490,7 +509,24 @@
       </div>
     {:else if currentDetail}
       <div class="editor-header">
-        <div>
+        <!-- 大屏幕侧边栏切换按钮（集成到header） -->
+        {#if isLargeScreen}
+          <button class="sidebar-toggle" on:click={toggleSidebar} title={sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'}>
+            {#if sidebarCollapsed}
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                <line x1="9" y1="3" x2="9" y2="21"></line>
+              </svg>
+            {:else}
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="11 17 6 12 11 7"></polyline>
+                <polyline points="18 17 13 12 18 7"></polyline>
+              </svg>
+            {/if}
+          </button>
+        {/if}
+        
+        <div class="header-content">
           <h2>编辑日记</h2>
           <p class="meta">
             创建：{formatDate(currentDetail.created_at)} · 修改：{formatDate(currentDetail.updated_at)}
@@ -656,11 +692,16 @@
     flex: 1;
     display: grid;
     overflow: hidden;
+    transition: grid-template-columns 0.3s ease;
   }
 
   .app-container.large-screen .layout {
     grid-template-columns: 320px 1fr;
     height: 100vh;
+  }
+
+  .app-container.large-screen .layout.sidebar-collapsed {
+    grid-template-columns: 1fr;
   }
 
   .app-container:not(.large-screen) .layout {
@@ -905,9 +946,47 @@
     flex-wrap: wrap;
   }
 
-  .editor-header > div:first-child {
+  /* 侧边栏切换按钮（集成到header） */
+  .sidebar-toggle {
+    flex-shrink: 0;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border-radius: 10px;
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    background: rgba(15, 23, 42, 0.6);
+    color: #94a3b8;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+  }
+
+  .sidebar-toggle:hover {
+    background: rgba(99, 102, 241, 0.2);
+    border-color: rgba(99, 102, 241, 0.5);
+    color: #c7d2fe;
+    transform: scale(1.05);
+  }
+
+  .sidebar-toggle:active {
+    transform: scale(0.98);
+  }
+
+  .sidebar-toggle svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .header-content {
     flex: 1;
     min-width: 200px;
+  }
+
+  .header-content h2 {
+    margin: 0;
+    font-size: 1.25rem;
   }
 
   .meta {
@@ -1144,6 +1223,11 @@
     .editor-header {
       flex-direction: column;
       align-items: stretch;
+      gap: 0.75rem;
+    }
+
+    .header-content h2 {
+      font-size: 1.1rem;
     }
 
     .tools {
