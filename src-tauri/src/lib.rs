@@ -1,0 +1,129 @@
+mod vault;
+
+use std::fs;
+use std::path::PathBuf;
+
+use tauri::{AppHandle, Manager, State};
+use time::macros::format_description;
+use time::OffsetDateTime;
+use uuid::Uuid;
+
+use crate::vault::{vault_file_path, Entry, UnlockResponse, VaultManager};
+
+#[derive(Default)]
+struct AppState {
+    manager: VaultManager,
+}
+
+fn resolve_vault_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let base = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|err| format!("failed to resolve app data dir: {err}"))?;
+    Ok(vault_file_path(base))
+}
+
+#[tauri::command]
+fn unlock_vault(
+    passphrase: String,
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<UnlockResponse, String> {
+    let path = resolve_vault_path(&app)?;
+    state
+        .manager
+        .unlock(&passphrase, path)
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn lock_vault(state: State<AppState>) -> Result<(), String> {
+    state.manager.lock();
+    Ok(())
+}
+
+#[tauri::command]
+fn list_entries(state: State<AppState>) -> Result<Vec<Entry>, String> {
+    state.manager.list().map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn create_entry(
+    title: Option<String>,
+    content: Option<String>,
+    state: State<AppState>,
+) -> Result<Entry, String> {
+    let title = title.unwrap_or_else(|| "Untitled entry".to_string());
+    let content = content.unwrap_or_default();
+    state
+        .manager
+        .create_entry(&title, &content)
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn update_entry(entry: Entry, state: State<AppState>) -> Result<Entry, String> {
+    state
+        .manager
+        .update_entry(entry)
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn delete_entry(id: Uuid, state: State<AppState>) -> Result<(), String> {
+    state
+        .manager
+        .delete_entry(id)
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn export_plaintext(state: State<AppState>) -> Result<String, String> {
+    state
+        .manager
+        .export_plaintext()
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn export_plaintext_file(app: AppHandle, state: State<AppState>) -> Result<String, String> {
+    let content = state
+        .manager
+        .export_plaintext()
+        .map_err(|err| err.to_string())?;
+
+    let date_fmt = format_description!("[year]-[month]-[day]");
+    let now = OffsetDateTime::now_utc();
+    let suggested = format!("diary-{}.md", now.format(&date_fmt).unwrap_or_else(|_| "today".into()));
+
+    let mut export_dir = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|err| format!("failed to resolve app data dir: {err}"))?;
+    export_dir.push("exports");
+    fs::create_dir_all(&export_dir).map_err(|err| err.to_string())?;
+
+    export_dir.push(suggested);
+    fs::write(&export_dir, content).map_err(|err| err.to_string())?;
+
+    Ok(export_dir.to_string_lossy().into_owned())
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .manage(AppState::default())
+        .invoke_handler(tauri::generate_handler![
+            unlock_vault,
+            lock_vault,
+            list_entries,
+            create_entry,
+            update_entry,
+            delete_entry,
+            export_plaintext,
+            export_plaintext_file
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
