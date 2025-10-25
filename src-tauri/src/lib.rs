@@ -9,7 +9,7 @@ use time::macros::format_description;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::vault::{vault_file_path, Entry, UnlockResponse, VaultManager};
+use crate::vault::{vault_file_path, Entry, EntryInfo, UnlockResponse, VaultManager};
 
 #[derive(Default)]
 struct AppState {
@@ -60,8 +60,16 @@ fn lock_vault(state: State<AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn list_entries(state: State<AppState>) -> Result<Vec<Entry>, String> {
+fn list_entries(state: State<AppState>) -> Result<Vec<EntryInfo>, String> {
     state.manager.list().map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn load_entry(id: Uuid, state: State<AppState>) -> Result<Entry, String> {
+    state
+        .manager
+        .load_entry(id)
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command]
@@ -103,6 +111,20 @@ fn export_plaintext(state: State<AppState>) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn store_image(path: String, state: State<AppState>) -> Result<String, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("未选择任何文件".to_string());
+    }
+
+    let source = PathBuf::from(trimmed);
+    state
+        .manager
+        .store_image(source)
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
 fn export_plaintext_file(state: State<AppState>) -> Result<String, String> {
     let content = state
         .manager
@@ -136,10 +158,12 @@ pub fn run() {
             unlock_vault,
             lock_vault,
             list_entries,
+            load_entry,
             create_entry,
             update_entry,
             delete_entry,
             export_plaintext,
+            store_image,
             export_plaintext_file
         ])
         .run(tauri::generate_context!())

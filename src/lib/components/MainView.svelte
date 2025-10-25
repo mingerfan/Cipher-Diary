@@ -1,7 +1,9 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
+  import { convertFileSrc } from '@tauri-apps/api/core';
+  import { get } from 'svelte/store';
   import {
-    activeEntry,
+    activeEntryDetail,
     activeEntryId,
     entries,
     filteredEntries,
@@ -16,10 +18,13 @@
     deleteVaultEntry,
     exportVaultToFile,
     fetchEntries,
+    importVaultImage,
+    loadVaultEntry,
     lockVault,
+    pickImageFile,
     updateVaultEntry
   } from '../api';
-  import type { Entry } from '../types';
+  import type { EntryDetail } from '../types';
   import { marked } from 'marked';
 
   let localTitle = '';
@@ -28,8 +33,11 @@
   let saveError: string | null = null;
   let deleting = false;
   let loadingEntries = false;
+  let loadingEntry = false;
+  let editorTextarea: HTMLTextAreaElement | null = null;
 
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  let loadedEntryId: string | null = null;
 
   const formatDate = (value: string | null | undefined) => {
     if (!value) return '—';
@@ -49,15 +57,22 @@
   async function ensureEntriesLoaded() {
     loadingEntries = true;
     try {
-      if ($entries.length > 0) {
+      const currentEntries = get(entries);
+      if (currentEntries.length > 0) {
         loadingEntries = false;
         return;
       }
       const items = await fetchEntries();
       entries.set(items);
-      if (items.length > 0) {
-        const latest = items[0];
-        activeEntryId.set(latest.id);
+      const existing = get(activeEntryId);
+      if (!existing && items.length > 0) {
+        activeEntryId.set(items[0].id);
+      }
+      if (items.length === 0) {
+        activeEntryDetail.set(null);
+        loadedEntryId = null;
+        localTitle = '';
+        localContent = '';
       }
     } catch (err) {
       saveError = err instanceof Error ? err.message : '无法读取日记条目';
@@ -66,35 +81,44 @@
     }
   }
 
-  $: currentEntry = $activeEntry;
-  $: if (currentEntry) {
-    localTitle = currentEntry.title;
-    localContent = currentEntry.content;
-  }
-
-  $: previewHtml = marked.parse(localContent || '');
-
-  async function handleCreate() {
+  async function loadEntryDetail(id: string) {
+    loadingEntry = true;
     try {
-      const entry = await createVaultEntry('新的日记', '');
-      entries.update((items) => [entry, ...items]);
-      activeEntryId.set(entry.id);
+      const entry = await loadVaultEntry(id);
+      entries.update((items) =>
+        items.map((item) =>
+          item.id === entry.id
+            ? { ...item, title: entry.title, updated_at: entry.updated_at }
+            : item
+        )
+      );
+      activeEntryDetail.set(entry);
+      loadedEntryId = entry.id;
       localTitle = entry.title;
       localContent = entry.content;
-      statusMessage.set('已创建新的日记');
+      saveError = null;
     } catch (err) {
-      saveError = err instanceof Error ? err.message : '无法创建日记';
+      const message = err instanceof Error ? err.message : '无法读取日记条目';
+      saveError = message;
+    } finally {
+      loadingEntry = false;
     }
   }
 
   function selectEntry(id: string) {
-    if (id === $activeEntryId) return;
+    if (id === get(activeEntryId)) return;
     if (debounceTimer) {
       clearTimeout(debounceTimer);
       debounceTimer = null;
     }
     activeEntryId.set(id);
+    activeEntryDetail.set(null);
+    loadedEntryId = null;
+    localTitle = '';
+    localContent = '';
     saveError = null;
+    statusMessage.set('');
+    void loadEntryDetail(id);
   }
 
   function scheduleSave() {
@@ -105,20 +129,29 @@
   }
 
   async function saveActiveEntry() {
-    if (!currentEntry) return;
+    const detail = get(activeEntryDetail);
+    if (!detail) return;
     debounceTimer = null;
     saving = true;
     saveError = null;
+    statusMessage.set('');
     try {
-      const updated: Entry = await updateVaultEntry({
-        ...currentEntry,
+      const updated: EntryDetail = await updateVaultEntry({
+        ...detail,
         title: localTitle,
         content: localContent
       });
+      activeEntryDetail.set(updated);
       entries.update((items) =>
-        items.map((item) => (item.id === updated.id ? updated : item))
+        items.map((item) =>
+          item.id === updated.id
+            ? { ...item, title: updated.title, updated_at: updated.updated_at }
+            : item
+        )
       );
-      activeEntryId.set(updated.id);
+      loadedEntryId = updated.id;
+      localTitle = updated.title;
+      localContent = updated.content;
       lastSaved.set(updated.updated_at ?? null);
       statusMessage.set('已保存');
     } catch (err) {
@@ -128,16 +161,36 @@
     }
   }
 
+  async function handleCreate() {
+    try {
+      const entry = await createVaultEntry('新的日记', '');
+      const { content, ...summary } = entry;
+      entries.update((items) => [summary, ...items]);
+      activeEntryDetail.set(entry);
+      activeEntryId.set(entry.id);
+      loadedEntryId = entry.id;
+      localTitle = entry.title;
+      localContent = entry.content;
+      statusMessage.set('已创建新的日记');
+    } catch (err) {
+      saveError = err instanceof Error ? err.message : '无法创建日记';
+    }
+  }
+
   async function handleDelete() {
-    if (!currentEntry) return;
+    const detail = get(activeEntryDetail);
+    if (!detail) return;
     if (!confirm('确定要删除当前日记吗？操作不可撤销。')) {
       return;
     }
     deleting = true;
     try {
-      await deleteVaultEntry(currentEntry.id);
-      entries.update((items) => items.filter((item) => item.id !== currentEntry.id));
-      const next = $entries[0];
+      await deleteVaultEntry(detail.id);
+      entries.update((items) => items.filter((item) => item.id !== detail.id));
+      activeEntryDetail.set(null);
+      loadedEntryId = null;
+      const remaining = get(entries);
+      const next = remaining[0];
       activeEntryId.set(next ? next.id : null);
       if (!next) {
         localTitle = '';
@@ -162,15 +215,52 @@
     }
   }
 
+  async function handleInsertImage() {
+    const detail = get(activeEntryDetail);
+    if (!detail) return;
+    try {
+      const file = await pickImageFile();
+      if (!file) return;
+      const storedPath = await importVaultImage(file);
+      const normalized = storedPath.replace(/\\/g, '/');
+      insertAtCursor(`\n\n![插图](${normalized})\n\n`);
+      saveError = null;
+      statusMessage.set('已插入图片');
+    } catch (err) {
+      saveError = err instanceof Error ? err.message : '插入图片失败';
+    }
+  }
+
+  function insertAtCursor(snippet: string) {
+    if (!editorTextarea) {
+      localContent = `${localContent}${snippet}`;
+      scheduleSave();
+      return;
+    }
+    const start = editorTextarea.selectionStart ?? localContent.length;
+    const end = editorTextarea.selectionEnd ?? start;
+    localContent = `${localContent.slice(0, start)}${snippet}${localContent.slice(end)}`;
+    const cursor = start + snippet.length;
+    setTimeout(() => {
+      if (editorTextarea) {
+        editorTextarea.selectionStart = cursor;
+        editorTextarea.selectionEnd = cursor;
+        editorTextarea.focus();
+      }
+    });
+    scheduleSave();
+  }
+
   async function handleLock() {
     await lockVault();
     unlocked.set(false);
     entries.set([]);
     activeEntryId.set(null);
+    activeEntryDetail.set(null);
     localTitle = '';
     localContent = '';
+    loadedEntryId = null;
     statusMessage.set('已锁定');
-    vaultRoot.set(null);
   }
 
   onDestroy(() => {
@@ -182,6 +272,44 @@
   onMount(() => {
     ensureEntriesLoaded();
   });
+
+  let currentDetail: EntryDetail | null = null;
+
+  $: currentDetail = $activeEntryDetail;
+
+  $: if (!$unlocked) {
+    loadedEntryId = null;
+    localTitle = '';
+    localContent = '';
+  }
+
+  $: if ($unlocked && $activeEntryId && loadedEntryId !== $activeEntryId && !loadingEntry) {
+    void loadEntryDetail($activeEntryId);
+  }
+
+  function resolveImageSource(root: string | null, href: string): string {
+    if (!href) return '';
+    if (/^(https?:|data:|file:|tauri)/i.test(href)) {
+      return href;
+    }
+    if (!root) return href;
+    const base = root.replace(/[\\/]+$/, '');
+    const relative = href.replace(/^[/\\]+/, '').replace(/\\/g, '/');
+    const fullPath = `${base}/${relative}`;
+    return convertFileSrc(fullPath);
+  }
+
+  $: previewHtml = (() => {
+    const renderer = new marked.Renderer();
+    const root = $vaultRoot;
+    renderer.image = ({ href = '', title, text }) => {
+      const src = resolveImageSource(root, href);
+      const titleAttr = title ? ` title="${title}"` : '';
+      const alt = text ?? '';
+      return `<img src="${src}" alt="${alt}"${titleAttr}>`;
+    };
+    return marked.parse(localContent || '', { renderer });
+  })();
 </script>
 
 <div class="layout">
@@ -199,7 +327,7 @@
     <input
       class="search"
       type="search"
-      placeholder="搜索标题或内容"
+      placeholder="搜索标题"
       bind:value={$searchTerm}
     />
     {#if loadingEntries}
@@ -221,16 +349,22 @@
   </aside>
 
   <section class="editor">
-    {#if currentEntry}
+    {#if loadingEntry && !currentDetail}
+      <div class="empty">
+        <h2>正在加载</h2>
+        <p>正在读取选中的日记内容…</p>
+      </div>
+    {:else if currentDetail}
       <div class="editor-header">
         <div>
           <h2>编辑日记</h2>
           <p class="meta">
-            创建：{formatDate(currentEntry.created_at)} · 修改：{formatDate(currentEntry.updated_at)}
+            创建：{formatDate(currentDetail.created_at)} · 修改：{formatDate(currentDetail.updated_at)}
           </p>
         </div>
         <div class="tools">
           <button class="ghost" on:click={handleExport}>导出</button>
+          <button class="ghost" on:click={handleInsertImage}>插入图片</button>
           <button class="ghost" on:click={handleLock}>锁定</button>
           <button class="danger" on:click={handleDelete} disabled={deleting}>删除</button>
         </div>
@@ -249,6 +383,7 @@
       <label class="input-label" for="entry-content">内容</label>
       <textarea
         id="entry-content"
+        bind:this={editorTextarea}
         bind:value={localContent}
         on:input={scheduleSave}
         placeholder="开始记录你的每一天…"
@@ -274,6 +409,8 @@
             正在保存…
           {:else if saveError}
             ⚠️ {saveError}
+          {:else if $statusMessage}
+            {$statusMessage}
           {:else if $lastSaved}
             上次保存：{formatDate($lastSaved)}
           {:else}
@@ -463,7 +600,13 @@
     transition: background 0.15s ease;
   }
 
-  .ghost:hover {
+  .ghost:disabled,
+  .danger:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  .ghost:hover:not(:disabled) {
     background: rgba(148, 163, 184, 0.15);
   }
 
@@ -472,7 +615,7 @@
     color: #fca5a5;
   }
 
-  .danger:hover {
+  .danger:hover:not(:disabled) {
     background: rgba(239, 68, 68, 0.12);
   }
 
@@ -543,56 +686,22 @@
     color: #94a3b8;
   }
 
-  :global(.markdown) h1,
-  :global(.markdown) h2,
-  :global(.markdown) h3,
-  :global(.markdown) h4,
-  :global(.markdown) h5,
-  :global(.markdown) h6 {
-    margin: 1.2rem 0 0.6rem;
-    font-weight: 600;
-  }
-
-  :global(.markdown) p {
-    margin: 0.75rem 0;
-    line-height: 1.7;
-  }
-
-  :global(.markdown) ul,
-  :global(.markdown) ol {
-    padding-left: 1.4rem;
-    margin: 0.75rem 0;
-  }
-
-  :global(.markdown) code {
-    background: rgba(15, 23, 42, 0.8);
-    padding: 0.1rem 0.35rem;
-    border-radius: 6px;
-    font-family: 'Fira Code', Consolas, monospace;
-    font-size: 0.92rem;
-  }
-
-  :global(.markdown) pre {
-    background: rgba(15, 23, 42, 0.8);
-    padding: 0.75rem 1rem;
-    border-radius: 12px;
-    overflow-x: auto;
-    margin: 1rem 0;
-  }
-
-  :global(.markdown) blockquote {
-    margin: 0.9rem 0;
-    padding-left: 1rem;
-    border-left: 3px solid rgba(99, 102, 241, 0.5);
-    color: #cbd5f5;
-  }
-
   .footer-row {
     display: flex;
     justify-content: space-between;
     color: #94a3b8;
     font-size: 0.9rem;
     margin-top: 0.5rem;
+  }
+
+  .status {
+    display: flex;
+    gap: 0.35rem;
+    align-items: center;
+  }
+
+  .count {
+    font-variant-numeric: tabular-nums;
   }
 
   .empty {

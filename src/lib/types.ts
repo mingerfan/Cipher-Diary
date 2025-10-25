@@ -1,13 +1,17 @@
-export interface Entry {
+export interface EntrySummary {
   id: string;
   title: string;
-  content: string;
   created_at: string;
   updated_at: string;
+  folder?: string | null;
+}
+
+export interface EntryDetail extends EntrySummary {
+  content: string;
 }
 
 export interface UnlockResponse {
-  entries: Entry[];
+  entries: EntrySummary[];
   created: boolean;
   last_saved?: string | null;
   vault_root: string;

@@ -1,7 +1,15 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import { pickVaultDirectory, unlockVault } from '../api';
-  import { activeEntryId, entries, lastSaved, statusMessage, unlocked, vaultRoot } from '../stores/vault';
+  import {
+    activeEntryDetail,
+    activeEntryId,
+    entries,
+    lastSaved,
+    statusMessage,
+    unlocked,
+    vaultRoot
+  } from '../stores/vault';
   import type { UnlockResponse } from '../types';
 
   const dispatch = createEventDispatcher<{ unlocked: { created: boolean } }>();
@@ -57,6 +65,7 @@
       entries.set(response.entries);
       lastSaved.set(response.last_saved ?? null);
       vaultRoot.set(response.vault_root);
+  activeEntryDetail.set(null);
       unlocked.set(true);
       activeEntryId.set(response.entries[0]?.id ?? null);
       statusMessage.set(response.created ? '新的日记库已创建' : '日记库已解锁');

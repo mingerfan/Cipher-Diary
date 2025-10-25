@@ -12,6 +12,23 @@ use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use uuid::Uuid;
 
 const VAULT_VERSION: u32 = 1;
+const METADATA_VERSION: u32 = 1;
+const ENTRY_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntryInfo {
+    pub id: Uuid,
+    pub title: String,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+    pub folder: Option<String>,
+}
+
+impl EntryInfo {
+    fn touch(&mut self) {
+        self.updated_at = OffsetDateTime::now_utc();
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Entry {
@@ -20,6 +37,7 @@ pub struct Entry {
     pub content: String,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
+    pub folder: Option<String>,
 }
 
 impl Entry {
@@ -31,17 +49,24 @@ impl Entry {
             content: content.into(),
             created_at: now,
             updated_at: now,
+            folder: None,
         }
     }
 
-    pub fn touch(&mut self) {
-        self.updated_at = OffsetDateTime::now_utc();
+    fn metadata(&self) -> EntryInfo {
+        EntryInfo {
+            id: self.id,
+            title: self.title.clone(),
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            folder: self.folder.clone(),
+        }
     }
 }
 
 #[derive(Debug, Serialize)]
 pub struct UnlockResponse {
-    pub entries: Vec<Entry>,
+    pub entries: Vec<EntryInfo>,
     pub created: bool,
     pub last_saved: Option<String>,
     pub vault_root: String,
@@ -53,41 +78,50 @@ pub struct VaultManager {
 }
 
 impl VaultManager {
-    pub fn unlock(&self, passphrase: &str, vault_path: PathBuf) -> Result<UnlockResponse> {
-        if !vault_path.exists() {
+    pub fn unlock(&self, passphrase: &str, metadata_path: PathBuf) -> Result<UnlockResponse> {
+        let root_path = metadata_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| metadata_path.clone());
+
+        let entries_dir = root_path.join("entries");
+        let attachments_dir = root_path.join("attachments");
+        fs::create_dir_all(&entries_dir).context("failed to prepare entries directory")?;
+        fs::create_dir_all(&attachments_dir).context("failed to prepare attachments directory")?;
+
+        if !metadata_path.exists() {
             let mut salt = [0u8; 16];
             OsRng.fill_bytes(&mut salt);
             let key = derive_key(passphrase, &salt)?;
-            let entries: Vec<Entry> = Vec::new();
-            save_vault(&vault_path, &salt, &key, &entries)?;
+
+            let metadata = VaultMetadata {
+                version: METADATA_VERSION,
+                entries: Vec::new(),
+            };
+            let now = OffsetDateTime::now_utc();
+            save_vault(&metadata_path, &salt, &key, &metadata, now)?;
 
             let unlocked = UnlockedVault {
                 key,
                 salt,
-                entries,
-                path: vault_path,
-                last_saved: OffsetDateTime::now_utc(),
-            };
-
-            let root_path = unlocked
-                .path
-                .parent()
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|| unlocked.path.clone());
-            let root_string = root_path.to_string_lossy().into_owned();
-
-            let response = UnlockResponse {
-                entries: Vec::new(),
-                created: true,
-                last_saved: unlocked.last_saved.format(&Rfc3339).ok(),
-                vault_root: root_string,
+                metadata: Vec::new(),
+                path: metadata_path,
+                entries_dir,
+                attachments_dir,
+                last_saved: now,
             };
 
             *self.inner.lock() = Some(unlocked);
-            return Ok(response);
+
+            return Ok(UnlockResponse {
+                entries: Vec::new(),
+                created: true,
+                last_saved: Some(now.format(&Rfc3339).unwrap_or_default()),
+                vault_root: display_path(&root_path),
+            });
         }
 
-        let stored = load_vault(&vault_path)?;
+        let stored = load_vault(&metadata_path)?;
         let salt_vec = general_purpose::STANDARD_NO_PAD
             .decode(&stored.salt)
             .context("invalid salt encoding")?;
@@ -98,30 +132,36 @@ impl VaultManager {
         salt.copy_from_slice(&salt_vec);
 
         let key = derive_key(passphrase, &salt)?;
-        let entries = decrypt_entries(&stored, &key)?;
+        let metadata = decrypt_metadata(&stored, &key)?;
+        if metadata.version != METADATA_VERSION {
+            return Err(anyhow!("unsupported metadata version"));
+        }
 
         let last_saved = stored
             .updated_at
-            .and_then(|ts| ts.format(&Rfc3339).ok());
+            .unwrap_or_else(OffsetDateTime::now_utc);
+
+        let entries = metadata.entries.clone();
 
         let unlocked = UnlockedVault {
             key,
             salt,
-            entries: entries.clone(),
-            path: vault_path,
-            last_saved: stored.updated_at.unwrap_or_else(OffsetDateTime::now_utc),
+            metadata: metadata.entries,
+            path: metadata_path,
+            entries_dir,
+            attachments_dir,
+            last_saved,
         };
 
         *self.inner.lock() = Some(unlocked);
 
-        let root_path = self.vault_root()?;
-        let root_string = root_path.to_string_lossy().into_owned();
-
         Ok(UnlockResponse {
             entries,
             created: false,
-            last_saved,
-            vault_root: root_string,
+            last_saved: stored
+                .updated_at
+                .and_then(|ts| ts.format(&Rfc3339).ok()),
+            vault_root: display_path(&root_path),
         })
     }
 
@@ -129,71 +169,109 @@ impl VaultManager {
         *self.inner.lock() = None;
     }
 
-    pub fn list(&self) -> Result<Vec<Entry>> {
+    pub fn list(&self) -> Result<Vec<EntryInfo>> {
         let guard = self.inner.lock();
         let vault = guard.as_ref().ok_or_else(|| anyhow!("vault is locked"))?;
-        let mut entries = vault.entries.clone();
+        let mut entries = vault.metadata.clone();
         entries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
         Ok(entries)
+    }
+
+    pub fn load_entry(&self, id: Uuid) -> Result<Entry> {
+        let guard = self.inner.lock();
+        let vault = guard.as_ref().ok_or_else(|| anyhow!("vault is locked"))?;
+        let meta = vault
+            .metadata
+            .iter()
+            .find(|entry| entry.id == id)
+            .cloned()
+            .ok_or_else(|| anyhow!("entry not found"))?;
+        let content = load_entry_content(&vault.entries_dir, &vault.key, &meta.id)?;
+        Ok(Entry {
+            id: meta.id,
+            title: meta.title,
+            content,
+            created_at: meta.created_at,
+            updated_at: meta.updated_at,
+            folder: meta.folder,
+        })
     }
 
     pub fn create_entry(&self, title: &str, content: &str) -> Result<Entry> {
         let mut guard = self.inner.lock();
         let vault = guard.as_mut().ok_or_else(|| anyhow!("vault is locked"))?;
         let entry = Entry::new(title, content);
-        vault.entries.push(entry.clone());
-        save_current(vault)?;
+        save_entry_content(&vault.entries_dir, &vault.key, &entry)?;
+        vault.metadata.push(entry.metadata());
+        save_metadata(vault)?;
         Ok(entry)
     }
 
     pub fn update_entry(&self, entry: Entry) -> Result<Entry> {
         let mut guard = self.inner.lock();
         let vault = guard.as_mut().ok_or_else(|| anyhow!("vault is locked"))?;
-        let updated = {
-            let existing = vault
-                .entries
-                .iter_mut()
-                .find(|item| item.id == entry.id)
-                .ok_or_else(|| anyhow!("entry not found"))?;
-            let mut updated = entry.clone();
-            updated.touch();
-            *existing = updated.clone();
-            updated
+        let info = vault
+            .metadata
+            .iter_mut()
+            .find(|item| item.id == entry.id)
+            .ok_or_else(|| anyhow!("entry not found"))?;
+
+        info.title = entry.title.clone();
+        info.folder = entry.folder.clone();
+        info.touch();
+
+        let updated = Entry {
+            id: entry.id,
+            title: entry.title,
+            content: entry.content,
+            created_at: info.created_at,
+            updated_at: info.updated_at,
+            folder: info.folder.clone(),
         };
 
-        save_current(vault)?;
+        save_entry_content(&vault.entries_dir, &vault.key, &updated)?;
+        save_metadata(vault)?;
         Ok(updated)
     }
 
     pub fn delete_entry(&self, id: Uuid) -> Result<()> {
         let mut guard = self.inner.lock();
         let vault = guard.as_mut().ok_or_else(|| anyhow!("vault is locked"))?;
-        let len_before = vault.entries.len();
-        vault.entries.retain(|entry| entry.id != id);
-        if vault.entries.len() == len_before {
+        let len_before = vault.metadata.len();
+        vault.metadata.retain(|entry| entry.id != id);
+        if vault.metadata.len() == len_before {
             return Err(anyhow!("entry not found"));
         }
-        save_current(vault)?;
+
+        let content_path = entry_file_path(&vault.entries_dir, &id);
+        if content_path.exists() {
+            fs::remove_file(&content_path).context("failed to remove entry file")?;
+        }
+
+        save_metadata(vault)?;
         Ok(())
     }
 
     pub fn export_plaintext(&self) -> Result<String> {
         let guard = self.inner.lock();
         let vault = guard.as_ref().ok_or_else(|| anyhow!("vault is locked"))?;
+        let mut entries = vault.metadata.clone();
+        entries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
         let mut lines = Vec::new();
-        for entry in vault.entries.iter() {
+        for info in entries.iter() {
+            let content = load_entry_content(&vault.entries_dir, &vault.key, &info.id)?;
             lines.push(format!(
-                "# {title}\nCreated: {created}\nUpdated: {updated}\n\n{content}\n",
-                title = entry.title,
-                created = entry
+                "# {title}\n创建：{created}\n更新：{updated}\n\n{content}\n",
+                title = info.title,
+                created = info
                     .created_at
                     .format(&Rfc3339)
                     .unwrap_or_else(|_| String::new()),
-                updated = entry
+                updated = info
                     .updated_at
                     .format(&Rfc3339)
                     .unwrap_or_else(|_| String::new()),
-                content = entry.content
+                content = content
             ));
         }
         Ok(lines.join("\n---\n\n"))
@@ -208,19 +286,62 @@ impl VaultManager {
             .map(Path::to_path_buf)
             .unwrap_or_else(|| vault.path.clone()))
     }
+
+    pub fn store_image(&self, source: PathBuf) -> Result<String> {
+        let mut guard = self.inner.lock();
+        let vault = guard.as_mut().ok_or_else(|| anyhow!("vault is locked"))?;
+
+        if !source.exists() {
+            return Err(anyhow!("选定的图片不存在"));
+        }
+
+        let now = OffsetDateTime::now_utc();
+        let year = now.year();
+    let month: u8 = now.month().into();
+
+        let mut target_dir = vault.attachments_dir.clone();
+        target_dir.push(year.to_string());
+        target_dir.push(format!("{:02}", month));
+        fs::create_dir_all(&target_dir).context("failed to prepare attachment directory")?;
+
+        let extension = source
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("bin");
+        let filename = format!("{id}.{ext}", id = Uuid::new_v4(), ext = extension);
+        let target_path = target_dir.join(filename);
+        fs::copy(&source, &target_path).context("无法复制图片文件")?;
+
+        let root = vault
+            .path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| vault.path.clone());
+        let relative = target_path
+            .strip_prefix(&root)
+            .unwrap_or(&target_path)
+            .to_path_buf();
+
+        Ok(display_path(&relative))
+    }
 }
 
-fn save_current(vault: &mut UnlockedVault) -> Result<()> {
+fn save_metadata(vault: &mut UnlockedVault) -> Result<()> {
     vault.last_saved = OffsetDateTime::now_utc();
-    save_vault(&vault.path, &vault.salt, &vault.key, &vault.entries)?;
-    Ok(())
+    let metadata = VaultMetadata {
+        version: METADATA_VERSION,
+        entries: vault.metadata.clone(),
+    };
+    save_vault(&vault.path, &vault.salt, &vault.key, &metadata, vault.last_saved)
 }
 
 struct UnlockedVault {
     key: [u8; 32],
     salt: [u8; 16],
-    entries: Vec<Entry>,
+    metadata: Vec<EntryInfo>,
     path: PathBuf,
+    entries_dir: PathBuf,
+    attachments_dir: PathBuf,
     last_saved: OffsetDateTime,
 }
 
@@ -231,6 +352,19 @@ struct StoredVault {
     nonce: String,
     ciphertext: String,
     updated_at: Option<OffsetDateTime>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct StoredEntry {
+    version: u32,
+    nonce: String,
+    ciphertext: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct VaultMetadata {
+    version: u32,
+    entries: Vec<EntryInfo>,
 }
 
 fn derive_key(passphrase: &str, salt: &[u8; 16]) -> Result<[u8; 32]> {
@@ -246,14 +380,20 @@ fn derive_key(passphrase: &str, salt: &[u8; 16]) -> Result<[u8; 32]> {
     Ok(key)
 }
 
-fn save_vault(path: &PathBuf, salt: &[u8; 16], key: &[u8; 32], entries: &[Entry]) -> Result<()> {
+fn save_vault(
+    path: &PathBuf,
+    salt: &[u8; 16],
+    key: &[u8; 32],
+    metadata: &VaultMetadata,
+    timestamp: OffsetDateTime,
+) -> Result<()> {
     let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| anyhow!("invalid key"))?;
     let mut nonce_bytes = [0u8; 12];
     OsRng.fill_bytes(&mut nonce_bytes);
     #[allow(deprecated)]
     let nonce = Nonce::from_slice(&nonce_bytes);
 
-    let payload = serde_json::to_vec(entries).context("failed to serialize entries")?;
+    let payload = serde_json::to_vec(metadata).context("failed to serialize metadata")?;
     let ciphertext = cipher
         .encrypt(nonce, payload.as_ref())
         .map_err(|_| anyhow!("encryption failed"))?;
@@ -263,7 +403,7 @@ fn save_vault(path: &PathBuf, salt: &[u8; 16], key: &[u8; 32], entries: &[Entry]
         salt: general_purpose::STANDARD_NO_PAD.encode(salt),
         nonce: general_purpose::STANDARD_NO_PAD.encode(nonce_bytes),
         ciphertext: general_purpose::STANDARD_NO_PAD.encode(ciphertext),
-        updated_at: Some(OffsetDateTime::now_utc()),
+        updated_at: Some(timestamp),
     };
 
     let serialized = serde_json::to_string_pretty(&stored).context("failed to serialize vault")?;
@@ -282,17 +422,17 @@ fn load_vault(path: &PathBuf) -> Result<StoredVault> {
     Ok(stored)
 }
 
-fn decrypt_entries(stored: &StoredVault, key: &[u8; 32]) -> Result<Vec<Entry>> {
+fn decrypt_metadata(stored: &StoredVault, key: &[u8; 32]) -> Result<VaultMetadata> {
     let nonce_bytes = general_purpose::STANDARD_NO_PAD
         .decode(&stored.nonce)
         .context("invalid nonce encoding")?;
-    let ciphertext = general_purpose::STANDARD_NO_PAD
-        .decode(&stored.ciphertext)
-        .context("invalid ciphertext encoding")?;
-
     if nonce_bytes.len() != 12 {
         return Err(anyhow!("invalid nonce length"));
     }
+
+    let ciphertext = general_purpose::STANDARD_NO_PAD
+        .decode(&stored.ciphertext)
+        .context("invalid ciphertext encoding")?;
 
     let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| anyhow!("invalid key"))?;
     #[allow(deprecated)]
@@ -301,8 +441,73 @@ fn decrypt_entries(stored: &StoredVault, key: &[u8; 32]) -> Result<Vec<Entry>> {
         .decrypt(nonce, ciphertext.as_ref())
         .map_err(|_| anyhow!("decryption failed"))?;
 
-    let entries: Vec<Entry> = serde_json::from_slice(&plaintext).context("invalid entry data")?;
-    Ok(entries)
+    let metadata: VaultMetadata = serde_json::from_slice(&plaintext).context("invalid metadata")?;
+    Ok(metadata)
+}
+
+fn save_entry_content(entries_dir: &Path, key: &[u8; 32], entry: &Entry) -> Result<()> {
+    fs::create_dir_all(entries_dir).context("failed to create entries directory")?;
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| anyhow!("invalid key"))?;
+    let mut nonce_bytes = [0u8; 12];
+    OsRng.fill_bytes(&mut nonce_bytes);
+    #[allow(deprecated)]
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    let ciphertext = cipher
+        .encrypt(nonce, entry.content.as_bytes())
+        .map_err(|_| anyhow!("encryption failed"))?;
+
+    let stored = StoredEntry {
+        version: ENTRY_VERSION,
+        nonce: general_purpose::STANDARD_NO_PAD.encode(nonce_bytes),
+        ciphertext: general_purpose::STANDARD_NO_PAD.encode(ciphertext),
+    };
+
+    let serialized = serde_json::to_string_pretty(&stored).context("failed to serialize entry")?;
+    let path = entry_file_path(entries_dir, &entry.id);
+    fs::write(path, serialized).context("failed to store entry")
+}
+
+fn load_entry_content(entries_dir: &Path, key: &[u8; 32], id: &Uuid) -> Result<String> {
+    let path = entry_file_path(entries_dir, id);
+    if !path.exists() {
+        return Err(anyhow!("entry content missing"));
+    }
+    let content = fs::read_to_string(&path).context("failed to read entry")?;
+    let stored: StoredEntry = serde_json::from_str(&content).context("failed to parse entry")?;
+    if stored.version != ENTRY_VERSION {
+        return Err(anyhow!("unsupported entry version"));
+    }
+
+    let nonce_bytes = general_purpose::STANDARD_NO_PAD
+        .decode(&stored.nonce)
+        .context("invalid nonce encoding")?;
+    if nonce_bytes.len() != 12 {
+        return Err(anyhow!("invalid nonce length"));
+    }
+    let ciphertext = general_purpose::STANDARD_NO_PAD
+        .decode(&stored.ciphertext)
+        .context("invalid ciphertext encoding")?;
+
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| anyhow!("invalid key"))?;
+    #[allow(deprecated)]
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext.as_ref())
+        .map_err(|_| anyhow!("decryption failed"))?;
+
+    let content = String::from_utf8(plaintext).context("invalid entry content")?;
+    Ok(content)
+}
+
+fn entry_file_path(entries_dir: &Path, id: &Uuid) -> PathBuf {
+    let mut path = entries_dir.to_path_buf();
+    path.push(format!("{id}.bin", id = id));
+    path
+}
+
+fn display_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }
 
 pub fn vault_file_path(mut base: PathBuf) -> PathBuf {

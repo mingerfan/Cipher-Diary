@@ -1,13 +1,14 @@
 import { derived, writable } from 'svelte/store';
-import type { Entry } from '../types';
+import type { EntryDetail, EntrySummary } from '../types';
 
 export const unlocked = writable(false);
-export const entries = writable<Entry[]>([]);
+export const entries = writable<EntrySummary[]>([]);
 export const activeEntryId = writable<string | null>(null);
 export const searchTerm = writable('');
 export const lastSaved = writable<string | null>(null);
 export const statusMessage = writable<string | null>(null);
 export const vaultRoot = writable<string | null>(null);
+export const activeEntryDetail = writable<EntryDetail | null>(null);
 
 export const filteredEntries = derived([entries, searchTerm], ([items, term]) => {
   if (!term.trim()) {
@@ -15,9 +16,7 @@ export const filteredEntries = derived([entries, searchTerm], ([items, term]) =>
   }
   const needle = term.toLowerCase();
   return items
-    .filter((entry) =>
-      entry.title.toLowerCase().includes(needle) || entry.content.toLowerCase().includes(needle)
-    )
+    .filter((entry) => entry.title.toLowerCase().includes(needle))
     .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
 });
 
