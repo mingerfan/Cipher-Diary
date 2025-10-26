@@ -3,20 +3,38 @@
   import UnlockView from '../lib/components/UnlockView.svelte';
   import { statusMessage, unlocked } from '../lib/stores/vault';
   import { onDestroy } from 'svelte';
+  import { get } from 'svelte/store';
 
+  let message = $state<string | null>(get(statusMessage));
   let toastTimer: ReturnType<typeof setTimeout> | null = null;
 
-  $: message = $statusMessage;
-  $: if (message) {
+  const unsubscribe = statusMessage.subscribe((value) => {
+    message = value;
+  });
+
+  $effect(() => {
+    const current = message;
+    if (!current) {
+      if (toastTimer) {
+        clearTimeout(toastTimer);
+        toastTimer = null;
+      }
+      return;
+    }
+
     if (toastTimer) {
       clearTimeout(toastTimer);
     }
-    toastTimer = setTimeout(() => statusMessage.set(null), 2800);
-  }
+    toastTimer = setTimeout(() => {
+      statusMessage.set(null);
+    }, 2800);
+  });
 
   onDestroy(() => {
+    unsubscribe();
     if (toastTimer) {
       clearTimeout(toastTimer);
+      toastTimer = null;
     }
   });
 

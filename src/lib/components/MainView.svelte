@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import { convertFileSrc } from '@tauri-apps/api/core';
   import { get } from 'svelte/store';
   import {
     activeEntryDetail,
@@ -19,8 +18,8 @@
     deleteVaultEntry,
     exportVaultToFile,
     fetchEntries,
-  importClipboardImage,
-  importVaultImage,
+    importClipboardImage,
+    importVaultImage,
     loadVaultEntry,
     lockVault,
     pickImageFile,
@@ -29,50 +28,88 @@
   import type { EntryDetail } from '../types';
   import { marked } from 'marked';
 
-  let localTitle = '';
-  let localContent = '';
-  let saving = false;
-  let saveError: string | null = null;
-  let deleting = false;
-  let loadingEntries = false;
-  let loadingEntry = false;
-  let editorTextarea: HTMLTextAreaElement | null = null;
+  let localTitle = $state('');
+  let localContent = $state('');
+  let saving = $state(false);
+  let saveError = $state<string | null>(null);
+  let deleting = $state(false);
+  let loadingEntries = $state(false);
+  let loadingEntry = $state(false);
+  let editorTextarea = $state<HTMLTextAreaElement | null>(null);
 
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let loadedEntryId: string | null = null;
-  
+
   // 视图切换状态: 'list' | 'editor'
-  let currentView: 'list' | 'editor' = 'list';
-  
+  let currentView = $state<'list' | 'editor'>('list');
+
   // 检测屏幕尺寸
-  let isLargeScreen = true;
-  
+  let isLargeScreen = $state(true);
+
   // 大屏幕侧边栏折叠状态（从localStorage读取）
-  let sidebarCollapsed = false;
-  
+  let sidebarCollapsed = $state(false);
+
+  // 全局状态镜像，便于运行时依赖跟踪
+  let isUnlocked = $state(get(unlocked));
+  let activeEntryIdValue = $state<string | null>(get(activeEntryId));
+  let vaultRootValue = $state<string | null>(get(vaultRoot));
+  let currentDetail = $state<EntryDetail | null>(get(activeEntryDetail));
+
   function updateScreenSize() {
+    if (typeof window === 'undefined') return;
     isLargeScreen = window.innerWidth > 768;
   }
-  
+
   function toggleSidebar() {
     sidebarCollapsed = !sidebarCollapsed;
-    // 保存到localStorage
     if (typeof window !== 'undefined') {
       localStorage.setItem('diary-sidebar-collapsed', String(sidebarCollapsed));
     }
   }
-  
+
   onMount(() => {
     updateScreenSize();
-    window.addEventListener('resize', updateScreenSize);
-    
-    // 从localStorage读取侧边栏状态
+
+    const unsubscribes: Array<() => void> = [];
+
     if (typeof window !== 'undefined') {
+      window.addEventListener('resize', updateScreenSize);
+
       const saved = localStorage.getItem('diary-sidebar-collapsed');
       if (saved !== null) {
         sidebarCollapsed = saved === 'true';
       }
     }
+
+    unsubscribes.push(
+      unlocked.subscribe((value) => {
+        isUnlocked = value;
+      })
+    );
+    unsubscribes.push(
+      activeEntryId.subscribe((value) => {
+        activeEntryIdValue = value;
+      })
+    );
+    unsubscribes.push(
+      vaultRoot.subscribe((value) => {
+        vaultRootValue = value;
+      })
+    );
+    unsubscribes.push(
+      activeEntryDetail.subscribe((value) => {
+        currentDetail = value;
+      })
+    );
+
+    void ensureEntriesLoaded();
+
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('resize', updateScreenSize);
+      }
+      unsubscribes.forEach((fn) => fn());
+    };
   });
 
   const formatDate = (value: string | null | undefined) => {
@@ -100,7 +137,7 @@
       }
       const items = await fetchEntries();
       entries.set(items);
-      const existing = get(activeEntryId);
+  const existing = activeEntryIdValue;
       if (!existing && items.length > 0) {
         activeEntryId.set(items[0].id);
       }
@@ -142,8 +179,7 @@
   }
 
   function selectEntry(id: string) {
-    if (id === get(activeEntryId)) {
-      // 如果是小屏设备，切换到编辑器视图
+    if (id === activeEntryIdValue) {
       if (!isLargeScreen) {
         currentView = 'editor';
       }
@@ -160,8 +196,6 @@
     localContent = '';
     saveError = null;
     statusMessage.set('');
-    void loadEntryDetail(id);
-    // 小屏设备自动切换到编辑器视图
     if (!isLargeScreen) {
       currentView = 'editor';
     }
@@ -175,7 +209,7 @@
   }
 
   async function saveActiveEntry() {
-    const detail = get(activeEntryDetail);
+    const detail = currentDetail;
     if (!detail) return;
     debounceTimer = null;
     saving = true;
@@ -224,7 +258,7 @@
   }
 
   async function handleDelete() {
-    const detail = get(activeEntryDetail);
+    const detail = currentDetail;
     if (!detail) return;
     if (!confirm('确定要删除当前日记吗？操作不可撤销。')) {
       return;
@@ -262,7 +296,7 @@
   }
 
   async function handleInsertImage() {
-    const detail = get(activeEntryDetail);
+    const detail = currentDetail;
     if (!detail) return;
     try {
       const file = await pickImageFile();
@@ -278,7 +312,7 @@
   }
 
   async function handlePaste(event: ClipboardEvent) {
-    const detail = get(activeEntryDetail);
+    const detail = currentDetail;
     if (!detail) return;
     const clipboard = event.clipboardData;
     if (!clipboard) return;
@@ -347,29 +381,11 @@
   onDestroy(() => {
     if (debounceTimer) {
       clearTimeout(debounceTimer);
+      debounceTimer = null;
     }
   });
 
-  onMount(() => {
-    ensureEntriesLoaded();
-  });
-
-  let currentDetail: EntryDetail | null = null;
-
-  $: currentDetail = $activeEntryDetail;
-
-  $: if (!$unlocked) {
-    loadedEntryId = null;
-    localTitle = '';
-    localContent = '';
-  }
-
-  $: if ($unlocked && $activeEntryId && loadedEntryId !== $activeEntryId && !loadingEntry) {
-    void loadEntryDetail($activeEntryId);
-  }
-
-  // 图片缓存：路径 -> data URL
-  let imageCache = new Map<string, string>();
+  const imageCache = new Map<string, string>();
 
   async function resolveImageSource(root: string | null, href: string): Promise<string> {
     if (!href) return '';
@@ -406,59 +422,98 @@
     }
   }
 
-  let previewHtml = '';
-  let isRenderingPreview = false;
+  let previewHtml = $state('');
+  let previewToken = 0;
 
-  // 异步渲染预览 HTML
   async function renderPreview(content: string, root: string | null) {
-    if (isRenderingPreview) return;
-    isRenderingPreview = true;
-    
-    try {
-      const renderer = new marked.Renderer();
-      const imagePromises: Promise<void>[] = [];
-      const imageMap = new Map<string, string>();
-      
-      // 第一遍：收集所有图片
-      renderer.image = ({ href = '', title, text }) => {
-        const placeholder = `__IMAGE_PLACEHOLDER_${imageMap.size}__`;
-        imageMap.set(placeholder, href);
-        imagePromises.push(
-          resolveImageSource(root, href).then(src => {
-            imageMap.set(placeholder, src);
-          })
-        );
-        return placeholder;
-      };
-      
-      let html = await marked.parse(content || '', { renderer });
-      
-      // 等待所有图片解密
-      await Promise.all(imagePromises);
-      
-      // 第二遍：替换占位符为实际图片
-      for (const [placeholder, src] of imageMap.entries()) {
-        if (src.startsWith('data:') || src.startsWith('http')) {
-          const alt = placeholder;
-          html = html.replace(placeholder, `<img src="${src}" alt="${alt}">`);
-        }
+    const token = ++previewToken;
+    if (!content.trim()) {
+      if (token === previewToken) {
+        previewHtml = '';
       }
-      
+      return;
+    }
+
+    const renderer = new marked.Renderer();
+    const imagePromises: Promise<void>[] = [];
+    const imageMap = new Map<string, { alt: string; src: string }>();
+
+    renderer.image = ({ href = '', text = '' }) => {
+      const placeholder = `__IMAGE_PLACEHOLDER_${imageMap.size}__`;
+      const alt = text.trim() || '插图';
+      imageMap.set(placeholder, { alt, src: href });
+      imagePromises.push(
+        resolveImageSource(root, href).then((resolved) => {
+          imageMap.set(placeholder, { alt, src: resolved });
+        })
+      );
+      return placeholder;
+    };
+
+    let html = await marked.parse(content || '', { renderer });
+
+    await Promise.all(imagePromises);
+
+    for (const [placeholder, data] of imageMap.entries()) {
+      const { alt, src } = data;
+      if (!src) {
+        html = html.replace(placeholder, '');
+        continue;
+      }
+      const safeAlt = escapeAttribute(alt);
+      html = html.replace(placeholder, `<img src="${src}" alt="${safeAlt}">`);
+    }
+
+    if (token === previewToken) {
       previewHtml = html;
-    } finally {
-      isRenderingPreview = false;
     }
   }
 
-  $: if (localContent || $vaultRoot) {
-    void renderPreview(localContent, $vaultRoot);
+  function escapeAttribute(value: string): string {
+    return value.replace(/['"&<>]/g, (char) => attributeEscapeMap[char] ?? char);
   }
-  
-  // 清理事件监听
-  onDestroy(() => {
-    if (typeof window !== 'undefined') {
-      window.removeEventListener('resize', updateScreenSize);
+
+  const attributeEscapeMap: Record<string, string> = {
+    '"': '&quot;',
+    "'": '&#39;',
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;'
+  };
+
+  $effect(() => {
+    if (!isUnlocked) {
+      loadedEntryId = null;
+      localTitle = '';
+      localContent = '';
     }
+  });
+
+  $effect(() => {
+    if (!isUnlocked) {
+      return;
+    }
+
+    const id = activeEntryIdValue;
+    if (!id || loadingEntry) {
+      return;
+    }
+
+    if (loadedEntryId === id) {
+      return;
+    }
+
+    void loadEntryDetail(id);
+  });
+
+  $effect(() => {
+    const content = localContent;
+    const root = vaultRootValue;
+    if (!content && !root) {
+      previewHtml = '';
+      return;
+    }
+    void renderPreview(content, root);
   });
 </script>
 
@@ -468,7 +523,7 @@
     <aside class:hidden={(!isLargeScreen && currentView !== 'list') || (isLargeScreen && sidebarCollapsed)}>
     <div class="header">
       <h2>日记列表</h2>
-      <button class="primary" on:click={handleCreate}>新建</button>
+      <button class="primary" onclick={handleCreate}>新建</button>
     </div>
     <div class="location">
       <span class="location-label">📁 存储目录</span>
@@ -490,7 +545,7 @@
       <ul class="entry-list">
         {#each $filteredEntries as item (item.id)}
           <li class:item-active={item.id === $activeEntryId}>
-            <button type="button" on:click={() => selectEntry(item.id)}>
+            <button type="button" onclick={() => selectEntry(item.id)}>
               <h3>{item.title || '未命名日记'}</h3>
               <p>{formatDate(item.updated_at)}</p>
             </button>
@@ -511,7 +566,7 @@
       <div class="editor-header">
         <!-- 大屏幕侧边栏切换按钮（集成到header） -->
         {#if isLargeScreen}
-          <button class="sidebar-toggle" on:click={toggleSidebar} title={sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'}>
+          <button class="sidebar-toggle" onclick={toggleSidebar} title={sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'}>
             {#if sidebarCollapsed}
               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
@@ -533,10 +588,10 @@
           </p>
         </div>
         <div class="tools">
-          <button class="ghost" on:click={handleExport}>导出</button>
-          <button class="ghost" on:click={handleInsertImage}>插入图片</button>
-          <button class="ghost" on:click={handleLock}>锁定</button>
-          <button class="danger" on:click={handleDelete} disabled={deleting}>删除</button>
+          <button class="ghost" onclick={handleExport}>导出</button>
+          <button class="ghost" onclick={handleInsertImage}>插入图片</button>
+          <button class="ghost" onclick={handleLock}>锁定</button>
+          <button class="danger" onclick={handleDelete} disabled={deleting}>删除</button>
         </div>
       </div>
 
@@ -546,7 +601,7 @@
         id="entry-title"
         type="text"
         bind:value={localTitle}
-        on:input={scheduleSave}
+  oninput={scheduleSave}
         placeholder="为日记命名"
       />
 
@@ -555,8 +610,8 @@
         id="entry-content"
         bind:this={editorTextarea}
         bind:value={localContent}
-        on:input={scheduleSave}
-        on:paste={handlePaste}
+  oninput={scheduleSave}
+  onpaste={handlePaste}
         placeholder="开始记录你的每一天…"
       ></textarea>
 
@@ -594,7 +649,7 @@
       <div class="empty">
         <h2>欢迎！</h2>
         <p>创建第一篇日记或从左侧选择已有条目。</p>
-        <button class="primary" on:click={handleCreate}>立即开始写作</button>
+  <button class="primary" onclick={handleCreate}>立即开始写作</button>
       </div>
     {/if}
   </section>
@@ -605,8 +660,8 @@
     <nav class="bottom-nav">
       <button 
         class="nav-item" 
-        class:active={currentView === 'list'}
-        on:click={() => currentView = 'list'}
+  class:active={currentView === 'list'}
+  onclick={() => currentView = 'list'}
       >
         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="8" y1="6" x2="21" y2="6"></line>
@@ -620,8 +675,8 @@
       </button>
       <button 
         class="nav-item" 
-        class:active={currentView === 'editor'}
-        on:click={() => currentView = 'editor'}
+  class:active={currentView === 'editor'}
+  onclick={() => currentView = 'editor'}
       >
         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>

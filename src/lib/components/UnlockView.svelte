@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createEventDispatcher, onMount } from 'svelte';
+  import { createEventDispatcher } from 'svelte';
   import { get } from 'svelte/store';
   import { pickVaultDirectory, unlockVault } from '../api';
   import {
@@ -15,21 +15,18 @@
 
   const dispatch = createEventDispatcher<{ unlocked: { created: boolean } }>();
 
-  let passphrase = '';
-  let confirm = '';
-  let requireConfirmation = false;
-  let busy = false;
-  let error: string | null = null;
-  let selectedDirectory: string | null = null;
+  let passphrase = $state('');
+  let confirm = $state('');
+  let requireConfirmation = $state(false);
+  let busy = $state(false);
+  let error = $state<string | null>(null);
+  let selectedDirectory = $state<string | null>(get(vaultRoot));
 
-  onMount(() => {
-    selectedDirectory = get(vaultRoot);
-  });
 
   function toggleConfirmation(event: Event) {
     const target = event.target as HTMLInputElement;
     requireConfirmation = target.checked;
-    if (!requireConfirmation) {
+    if (!target.checked) {
       confirm = '';
     }
   }
@@ -68,9 +65,9 @@
     try {
       const response: UnlockResponse = await unlockVault(passphrase, selectedDirectory);
       entries.set(response.entries);
-    lastSaved.set(response.last_saved ?? null);
-    vaultRoot.set(response.vault_root);
-    activeEntryDetail.set(null);
+      lastSaved.set(response.last_saved ?? null);
+      vaultRoot.set(response.vault_root);
+      activeEntryDetail.set(null);
       unlocked.set(true);
       activeEntryId.set(response.entries[0]?.id ?? null);
       statusMessage.set(response.created ? '新的日记库已创建' : '日记库已解锁');
@@ -92,7 +89,7 @@
     <h1>🔐 本地加密日记</h1>
     <p class="tagline">参照 DailyTxT 的单页体验，所有数据仅保存在本机。</p>
 
-    <form on:submit|preventDefault={handleSubmit}>
+  <form onsubmit={handleSubmit}>
       <label for="passphrase">密码短语</label>
       <input
         id="passphrase"
@@ -104,7 +101,7 @@
       />
 
       <label class="confirm-toggle">
-        <input type="checkbox" on:change={toggleConfirmation} />
+  <input type="checkbox" onchange={toggleConfirmation} />
         <span>首次使用？勾选后重复输入以防输入错误</span>
       </label>
 
@@ -134,11 +131,11 @@
           {/if}
         </p>
         <div class="picker-actions">
-          <button type="button" class="secondary" on:click={chooseDirectory} disabled={busy}>
+          <button type="button" class="secondary" onclick={chooseDirectory} disabled={busy}>
             选择文件夹
           </button>
           {#if selectedDirectory}
-            <button type="button" class="ghost" on:click={clearDirectory} disabled={busy}>
+            <button type="button" class="ghost" onclick={clearDirectory} disabled={busy}>
               使用默认位置
             </button>
           {/if}
