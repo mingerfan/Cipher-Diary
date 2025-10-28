@@ -1,9 +1,17 @@
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
-import type { EntryDetail, EntrySummary, UnlockResponse } from './types';
+import type { EntryDetail, EntrySummary, TextEncryption, UnlockResponse } from './types';
 
-export async function unlockVault(passphrase: string, directory?: string | null): Promise<UnlockResponse> {
-  return invoke<UnlockResponse>('unlock_vault', { passphrase, directory: directory ?? undefined });
+export async function unlockVault(
+  passphrase: string,
+  directory: string | null | undefined,
+  encryption: TextEncryption
+): Promise<UnlockResponse> {
+  return invoke<UnlockResponse>('unlock_vault', {
+    passphrase,
+    directory: directory ?? undefined,
+    encryption
+  });
 }
 
 export async function lockVault(): Promise<void> {

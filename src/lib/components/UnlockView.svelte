@@ -9,9 +9,11 @@
     lastSaved,
     statusMessage,
     unlocked as unlockedStore,
-    vaultRoot
+    vaultRoot,
+    availableTextEncryptions,
+    textEncryption
   } from '../stores/vault';
-  import type { UnlockResponse } from '../types';
+  import type { TextEncryption, UnlockResponse } from '../types';
 
   let { unlocked } = $props<{ unlocked?: (payload: { created: boolean }) => void }>();
 
@@ -21,6 +23,12 @@
   let busy = $state(false);
   let error = $state<string | null>(null);
   let selectedDirectory = $state<string | null>(get(vaultRoot));
+
+  const ENCRYPTION_LABELS: Record<TextEncryption, string> = {
+    aes256_gcm: 'AES-256-GCM'
+  };
+
+  let selectedEncryption = $state<TextEncryption>(get(textEncryption));
 
 
   function toggleConfirmation(event: Event) {
@@ -47,6 +55,12 @@
     selectedDirectory = null;
   }
 
+  function handleEncryptionChange(event: Event) {
+    const value = (event.target as HTMLSelectElement).value as TextEncryption;
+    selectedEncryption = value;
+    textEncryption.set(value);
+  }
+
   async function handleSubmit(event: Event) {
     event.preventDefault();
     error = null;
@@ -63,10 +77,14 @@
 
     busy = true;
     try {
-      const response: UnlockResponse = await unlockVault(passphrase, selectedDirectory);
+  textEncryption.set(selectedEncryption);
+  const response: UnlockResponse = await unlockVault(passphrase, selectedDirectory, selectedEncryption);
       entries.set(response.entries);
       lastSaved.set(response.last_saved ?? null);
       vaultRoot.set(response.vault_root);
+  availableTextEncryptions.set(response.available_text_encryptions);
+  textEncryption.set(response.text_encryption);
+  selectedEncryption = response.text_encryption;
       activeEntryDetail.set(null);
       unlockedStore.set(true);
       activeEntryId.set(response.entries[0]?.id ?? null);
@@ -116,6 +134,18 @@
           required
         />
       {/if}
+
+      <label for="encryption">文本加密算法</label>
+      <select
+        id="encryption"
+        bind:value={selectedEncryption}
+        onchange={handleEncryptionChange}
+        disabled={busy}
+      >
+        {#each $availableTextEncryptions as option}
+          <option value={option}>{ENCRYPTION_LABELS[option] ?? option}</option>
+        {/each}
+      </select>
 
       {#if error}
         <div class="error">{error}</div>
@@ -214,6 +244,23 @@
   }
 
   input[type='password']:focus {
+    outline: none;
+    border-color: #6366f1;
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25);
+  }
+
+  select {
+    padding: 0.75rem 1rem;
+    border-radius: 12px;
+    border: 1px solid rgba(148, 163, 184, 0.4);
+    background: rgba(15, 23, 42, 0.6);
+    color: #e2e8f0;
+    transition: border 0.2s ease, box-shadow 0.2s ease;
+    font-size: 1rem;
+    appearance: none;
+  }
+
+  select:focus {
     outline: none;
     border-color: #6366f1;
     box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25);

@@ -3,13 +3,15 @@ mod vault;
 use std::fs;
 use std::path::PathBuf;
 
-use tauri::{AppHandle, State};
 use tauri::Manager;
+use tauri::{AppHandle, State};
 use time::macros::format_description;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::vault::{vault_file_path, Entry, EntryInfo, UnlockResponse, VaultManager};
+use crate::vault::{
+    vault_file_path, Entry, EntryInfo, TextEncryption, UnlockResponse, VaultManager,
+};
 
 #[derive(Default)]
 struct AppState {
@@ -26,12 +28,10 @@ fn resolve_vault_path(app: &AppHandle, directory: Option<String>) -> Result<Path
         if path.is_file() {
             return Err("所选路径不是文件夹".to_string());
         }
-        fs::create_dir_all(&path)
-            .map_err(|err| format!("无法创建所选目录: {err}"))?;
+        fs::create_dir_all(&path).map_err(|err| format!("无法创建所选目录: {err}"))?;
         path
     } else {
-        app
-            .path()
+        app.path()
             .app_local_data_dir()
             .map_err(|err| format!("failed to resolve app data dir: {err}"))?
     };
@@ -43,13 +43,14 @@ fn resolve_vault_path(app: &AppHandle, directory: Option<String>) -> Result<Path
 fn unlock_vault(
     passphrase: String,
     directory: Option<String>,
+    encryption: Option<TextEncryption>,
     app: AppHandle,
     state: State<AppState>,
 ) -> Result<UnlockResponse, String> {
     let path = resolve_vault_path(&app, directory)?;
     state
         .manager
-        .unlock(&passphrase, path)
+        .unlock(&passphrase, path, encryption)
         .map_err(|err| err.to_string())
 }
 
@@ -66,10 +67,7 @@ fn list_entries(state: State<AppState>) -> Result<Vec<EntryInfo>, String> {
 
 #[tauri::command]
 fn load_entry(id: Uuid, state: State<AppState>) -> Result<Entry, String> {
-    state
-        .manager
-        .load_entry(id)
-        .map_err(|err| err.to_string())
+    state.manager.load_entry(id).map_err(|err| err.to_string())
 }
 
 #[tauri::command]
@@ -146,12 +144,12 @@ fn export_plaintext_file(state: State<AppState>) -> Result<String, String> {
 
     let date_fmt = format_description!("[year]-[month]-[day]");
     let now = OffsetDateTime::now_utc();
-    let suggested = format!("diary-{}.md", now.format(&date_fmt).unwrap_or_else(|_| "today".into()));
+    let suggested = format!(
+        "diary-{}.md",
+        now.format(&date_fmt).unwrap_or_else(|_| "today".into())
+    );
 
-    let mut export_dir = state
-        .manager
-        .vault_root()
-        .map_err(|err| err.to_string())?;
+    let mut export_dir = state.manager.vault_root().map_err(|err| err.to_string())?;
     export_dir.push("exports");
     fs::create_dir_all(&export_dir).map_err(|err| err.to_string())?;
 

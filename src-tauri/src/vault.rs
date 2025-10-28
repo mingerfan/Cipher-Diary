@@ -1,6 +1,6 @@
+use aes::Aes256;
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
-use aes::Aes256;
 use anyhow::{anyhow, Context, Result};
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::{engine::general_purpose, Engine as _};
@@ -18,7 +18,43 @@ type Aes256Ctr = ctr::Ctr128BE<Aes256>;
 const VAULT_VERSION: u32 = 1;
 const METADATA_VERSION: u32 = 1;
 const ENTRY_VERSION: u32 = 1;
-const IMAGE_MAGIC: &[u8] = b"VAULTIMG"; // 8 字节魔数标识加密图片
+const IMAGE_MAGIC_PREFIX: &[u8] = b"VAULTIMG"; // 加密图片的固定前缀
+
+const SUPPORTED_TEXT_ENCRYPTIONS: [TextEncryption; 1] = [TextEncryption::Aes256Gcm];
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TextEncryption {
+    Aes256Gcm,
+}
+
+impl Default for TextEncryption {
+    fn default() -> Self {
+        TextEncryption::Aes256Gcm
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ImageEncryption {
+    Aes256Ctr,
+}
+
+impl ImageEncryption {
+    const MARKER_AES256_CTR: &'static [u8] = b":AES256CTR:";
+
+    fn marker(self) -> &'static [u8] {
+        match self {
+            ImageEncryption::Aes256Ctr => Self::MARKER_AES256_CTR,
+        }
+    }
+
+    fn detect(bytes: &[u8]) -> Option<(Self, usize)> {
+        if bytes.starts_with(Self::MARKER_AES256_CTR) {
+            return Some((Self::Aes256Ctr, Self::MARKER_AES256_CTR.len()));
+        }
+        None
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntryInfo {
@@ -75,6 +111,8 @@ pub struct UnlockResponse {
     pub created: bool,
     pub last_saved: Option<String>,
     pub vault_root: String,
+    pub text_encryption: TextEncryption,
+    pub available_text_encryptions: Vec<TextEncryption>,
 }
 
 #[derive(Default)]
@@ -83,7 +121,12 @@ pub struct VaultManager {
 }
 
 impl VaultManager {
-    pub fn unlock(&self, passphrase: &str, metadata_path: PathBuf) -> Result<UnlockResponse> {
+    pub fn unlock(
+        &self,
+        passphrase: &str,
+        metadata_path: PathBuf,
+        preferred_encryption: Option<TextEncryption>,
+    ) -> Result<UnlockResponse> {
         let root_path = metadata_path
             .parent()
             .map(Path::to_path_buf)
@@ -94,14 +137,22 @@ impl VaultManager {
         fs::create_dir_all(&entries_dir).context("failed to prepare entries directory")?;
         fs::create_dir_all(&attachments_dir).context("failed to prepare attachments directory")?;
 
+        let available_methods = SUPPORTED_TEXT_ENCRYPTIONS.to_vec();
+
         if !metadata_path.exists() {
             let mut salt = [0u8; 16];
             OsRng.fill_bytes(&mut salt);
             let key = derive_key(passphrase, &salt)?;
 
+            let text_encryption = preferred_encryption.unwrap_or_default();
+            if !SUPPORTED_TEXT_ENCRYPTIONS.contains(&text_encryption) {
+                return Err(anyhow!("unsupported text encryption method"));
+            }
+
             let metadata = VaultMetadata {
                 version: METADATA_VERSION,
                 entries: Vec::new(),
+                text_encryption,
             };
             let now = OffsetDateTime::now_utc();
             save_vault(&metadata_path, &salt, &key, &metadata, now)?;
@@ -113,6 +164,7 @@ impl VaultManager {
                 path: metadata_path,
                 entries_dir,
                 attachments_dir,
+                text_encryption,
                 last_saved: now,
             };
 
@@ -123,6 +175,8 @@ impl VaultManager {
                 created: true,
                 last_saved: Some(now.format(&Rfc3339).unwrap_or_default()),
                 vault_root: display_path(&root_path),
+                text_encryption,
+                available_text_encryptions: available_methods,
             });
         }
 
@@ -138,35 +192,42 @@ impl VaultManager {
 
         let key = derive_key(passphrase, &salt)?;
         let metadata = decrypt_metadata(&stored, &key)?;
-        if metadata.version != METADATA_VERSION {
+        let VaultMetadata {
+            version,
+            entries,
+            text_encryption,
+        } = metadata;
+        if version != METADATA_VERSION {
             return Err(anyhow!("unsupported metadata version"));
         }
+        if !SUPPORTED_TEXT_ENCRYPTIONS.contains(&text_encryption) {
+            return Err(anyhow!("unsupported text encryption method"));
+        }
 
-        let last_saved = stored
-            .updated_at
-            .unwrap_or_else(OffsetDateTime::now_utc);
+        let last_saved = stored.updated_at.unwrap_or_else(OffsetDateTime::now_utc);
 
-        let entries = metadata.entries.clone();
+        let entries_clone = entries.clone();
 
         let unlocked = UnlockedVault {
             key,
             salt,
-            metadata: metadata.entries,
+            metadata: entries,
             path: metadata_path,
             entries_dir,
             attachments_dir,
+            text_encryption,
             last_saved,
         };
 
         *self.inner.lock() = Some(unlocked);
 
         Ok(UnlockResponse {
-            entries,
+            entries: entries_clone,
             created: false,
-            last_saved: stored
-                .updated_at
-                .and_then(|ts| ts.format(&Rfc3339).ok()),
+            last_saved: stored.updated_at.and_then(|ts| ts.format(&Rfc3339).ok()),
             vault_root: display_path(&root_path),
+            text_encryption,
+            available_text_encryptions: available_methods,
         })
     }
 
@@ -191,7 +252,12 @@ impl VaultManager {
             .find(|entry| entry.id == id)
             .cloned()
             .ok_or_else(|| anyhow!("entry not found"))?;
-        let content = load_entry_content(&vault.entries_dir, &vault.key, &meta.id)?;
+        let content = load_entry_content(
+            &vault.entries_dir,
+            &vault.key,
+            vault.text_encryption,
+            &meta.id,
+        )?;
         Ok(Entry {
             id: meta.id,
             title: meta.title,
@@ -206,7 +272,12 @@ impl VaultManager {
         let mut guard = self.inner.lock();
         let vault = guard.as_mut().ok_or_else(|| anyhow!("vault is locked"))?;
         let entry = Entry::new(title, content);
-        save_entry_content(&vault.entries_dir, &vault.key, &entry)?;
+        save_entry_content(
+            &vault.entries_dir,
+            &vault.key,
+            vault.text_encryption,
+            &entry,
+        )?;
         vault.metadata.push(entry.metadata());
         save_metadata(vault)?;
         Ok(entry)
@@ -234,7 +305,12 @@ impl VaultManager {
             folder: info.folder.clone(),
         };
 
-        save_entry_content(&vault.entries_dir, &vault.key, &updated)?;
+        save_entry_content(
+            &vault.entries_dir,
+            &vault.key,
+            vault.text_encryption,
+            &updated,
+        )?;
         save_metadata(vault)?;
         Ok(updated)
     }
@@ -264,7 +340,12 @@ impl VaultManager {
         entries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
         let mut lines = Vec::new();
         for info in entries.iter() {
-            let content = load_entry_content(&vault.entries_dir, &vault.key, &info.id)?;
+            let content = load_entry_content(
+                &vault.entries_dir,
+                &vault.key,
+                vault.text_encryption,
+                &info.id,
+            )?;
             lines.push(format!(
                 "# {title}\n创建：{created}\n更新：{updated}\n\n{content}\n",
                 title = info.title,
@@ -307,7 +388,7 @@ impl VaultManager {
             .filter(|ext| !ext.is_empty())
             .unwrap_or("bin");
         let (target_path, relative) = attachment_target(vault, extension)?;
-        
+
         // 读取并加密图片
         let data = fs::read(&source).context("无法读取图片文件")?;
         let encrypted = encrypt_image_data(&vault.key, &data)?;
@@ -331,7 +412,7 @@ impl VaultManager {
 
         let extension = infer_image_extension(name.as_deref(), mime.as_deref());
         let (target_path, relative) = attachment_target(vault, &extension)?;
-        
+
         // 加密图片数据
         let encrypted = encrypt_image_data(&vault.key, &data)?;
         fs::write(&target_path, encrypted).context("无法写入加密图片数据")?;
@@ -342,22 +423,23 @@ impl VaultManager {
     pub fn decrypt_image(&self, path: &str) -> Result<Vec<u8>> {
         let guard = self.inner.lock();
         let vault = guard.as_ref().ok_or_else(|| anyhow!("vault is locked"))?;
-        
+
         // 解析路径（可能是相对路径或绝对路径）
         let image_path = if Path::new(path).is_absolute() {
             PathBuf::from(path)
         } else {
-            let root = vault.path
+            let root = vault
+                .path
                 .parent()
                 .map(PathBuf::from)
                 .unwrap_or_else(|| vault.path.clone());
             root.join(path.trim_start_matches('/').trim_start_matches('\\'))
         };
-        
+
         if !image_path.exists() {
             return Err(anyhow!("图片文件不存在"));
         }
-        
+
         let encrypted = fs::read(&image_path).context("无法读取图片文件")?;
         decrypt_image_data(&vault.key, &encrypted)
     }
@@ -368,8 +450,15 @@ fn save_metadata(vault: &mut UnlockedVault) -> Result<()> {
     let metadata = VaultMetadata {
         version: METADATA_VERSION,
         entries: vault.metadata.clone(),
+        text_encryption: vault.text_encryption,
     };
-    save_vault(&vault.path, &vault.salt, &vault.key, &metadata, vault.last_saved)
+    save_vault(
+        &vault.path,
+        &vault.salt,
+        &vault.key,
+        &metadata,
+        vault.last_saved,
+    )
 }
 
 struct UnlockedVault {
@@ -379,6 +468,7 @@ struct UnlockedVault {
     path: PathBuf,
     entries_dir: PathBuf,
     attachments_dir: PathBuf,
+    text_encryption: TextEncryption,
     last_saved: OffsetDateTime,
 }
 
@@ -402,6 +492,8 @@ struct StoredEntry {
 struct VaultMetadata {
     version: u32,
     entries: Vec<EntryInfo>,
+    #[serde(default)]
+    text_encryption: TextEncryption,
 }
 
 fn derive_key(passphrase: &str, salt: &[u8; 16]) -> Result<[u8; 32]> {
@@ -482,17 +574,26 @@ fn decrypt_metadata(stored: &StoredVault, key: &[u8; 32]) -> Result<VaultMetadat
     Ok(metadata)
 }
 
-fn save_entry_content(entries_dir: &Path, key: &[u8; 32], entry: &Entry) -> Result<()> {
+fn save_entry_content(
+    entries_dir: &Path,
+    key: &[u8; 32],
+    method: TextEncryption,
+    entry: &Entry,
+) -> Result<()> {
     fs::create_dir_all(entries_dir).context("failed to create entries directory")?;
-    let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| anyhow!("invalid key"))?;
-    let mut nonce_bytes = [0u8; 12];
-    OsRng.fill_bytes(&mut nonce_bytes);
-    #[allow(deprecated)]
-    let nonce = Nonce::from_slice(&nonce_bytes);
-
-    let ciphertext = cipher
-        .encrypt(nonce, entry.content.as_bytes())
-        .map_err(|_| anyhow!("encryption failed"))?;
+    let (nonce_bytes, ciphertext) = match method {
+        TextEncryption::Aes256Gcm => {
+            let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| anyhow!("invalid key"))?;
+            let mut nonce_bytes = [0u8; 12];
+            OsRng.fill_bytes(&mut nonce_bytes);
+            #[allow(deprecated)]
+            let nonce = Nonce::from_slice(&nonce_bytes);
+            let ciphertext = cipher
+                .encrypt(nonce, entry.content.as_bytes())
+                .map_err(|_| anyhow!("encryption failed"))?;
+            (nonce_bytes, ciphertext)
+        }
+    };
 
     let stored = StoredEntry {
         version: ENTRY_VERSION,
@@ -505,7 +606,12 @@ fn save_entry_content(entries_dir: &Path, key: &[u8; 32], entry: &Entry) -> Resu
     fs::write(path, serialized).context("failed to store entry")
 }
 
-fn load_entry_content(entries_dir: &Path, key: &[u8; 32], id: &Uuid) -> Result<String> {
+fn load_entry_content(
+    entries_dir: &Path,
+    key: &[u8; 32],
+    method: TextEncryption,
+    id: &Uuid,
+) -> Result<String> {
     let path = entry_file_path(entries_dir, id);
     if !path.exists() {
         return Err(anyhow!("entry content missing"));
@@ -526,12 +632,16 @@ fn load_entry_content(entries_dir: &Path, key: &[u8; 32], id: &Uuid) -> Result<S
         .decode(&stored.ciphertext)
         .context("invalid ciphertext encoding")?;
 
-    let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| anyhow!("invalid key"))?;
-    #[allow(deprecated)]
-    let nonce = Nonce::from_slice(&nonce_bytes);
-    let plaintext = cipher
-        .decrypt(nonce, ciphertext.as_ref())
-        .map_err(|_| anyhow!("decryption failed"))?;
+    let plaintext = match method {
+        TextEncryption::Aes256Gcm => {
+            let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| anyhow!("invalid key"))?;
+            #[allow(deprecated)]
+            let nonce = Nonce::from_slice(&nonce_bytes);
+            cipher
+                .decrypt(nonce, ciphertext.as_ref())
+                .map_err(|_| anyhow!("decryption failed"))?
+        }
+    };
 
     let content = String::from_utf8(plaintext).context("invalid entry content")?;
     Ok(content)
@@ -562,7 +672,11 @@ fn attachment_target(vault: &UnlockedVault, extension: &str) -> Result<(PathBuf,
     target_dir.push(format!("{:02}", month));
     fs::create_dir_all(&target_dir).context("failed to prepare attachment directory")?;
 
-    let ext = if extension.is_empty() { "bin" } else { extension };
+    let ext = if extension.is_empty() {
+        "bin"
+    } else {
+        extension
+    };
     let filename = format!("{id}.{ext}", id = Uuid::new_v4(), ext = ext);
     let target_path = target_dir.join(filename);
 
@@ -613,47 +727,66 @@ fn encrypt_image_data(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>> {
     // 生成随机 IV (16 字节，CTR 模式使用 128 位)
     let mut iv = [0u8; 16];
     OsRng.fill_bytes(&mut iv);
-    
-    // 创建输出缓冲区：魔数 + IV + 密文
-    let mut encrypted = Vec::with_capacity(IMAGE_MAGIC.len() + iv.len() + data.len());
-    encrypted.extend_from_slice(IMAGE_MAGIC);
-    encrypted.extend_from_slice(&iv);
-    
+
+    let method = ImageEncryption::Aes256Ctr;
+    let marker = method.marker();
+
+    // 创建输出缓冲区：魔数 + 标记 + IV + 密文
+    let mut encrypted =
+        Vec::with_capacity(IMAGE_MAGIC_PREFIX.len() + marker.len() + iv.len() + data.len());
+    encrypted.extend_from_slice(IMAGE_MAGIC_PREFIX);
+    encrypted.extend_from_slice(marker);
+
     // 复制数据用于加密
     let mut buffer = data.to_vec();
-    
+
     // 使用 AES-256-CTR 加密
     let mut cipher = Aes256Ctr::new(key.into(), &iv.into());
     cipher.apply_keystream(&mut buffer);
-    
+
+    encrypted.extend_from_slice(&iv);
     encrypted.extend_from_slice(&buffer);
     Ok(encrypted)
 }
 
 fn decrypt_image_data(key: &[u8; 32], encrypted: &[u8]) -> Result<Vec<u8>> {
     // 检查最小长度：魔数(8) + IV(16)
-    if encrypted.len() < IMAGE_MAGIC.len() + 16 {
+    if encrypted.len() < IMAGE_MAGIC_PREFIX.len() + 16 {
         return Err(anyhow!("invalid encrypted image: too short"));
     }
-    
+
     // 检查魔数
-    if &encrypted[..IMAGE_MAGIC.len()] != IMAGE_MAGIC {
+    if &encrypted[..IMAGE_MAGIC_PREFIX.len()] != IMAGE_MAGIC_PREFIX {
         // 不是加密图片，可能是旧版本的明文图片
         return Ok(encrypted.to_vec());
     }
-    
+
+    let mut offset = IMAGE_MAGIC_PREFIX.len();
+    let (method, marker_len) = ImageEncryption::detect(&encrypted[offset..])
+        .map(|(m, len)| (m, len))
+        .unwrap_or((ImageEncryption::Aes256Ctr, 0));
+    offset += marker_len;
+
+    if encrypted.len() < offset + 16 {
+        return Err(anyhow!("invalid encrypted image: missing iv"));
+    }
+
     // 提取 IV
-    let iv_start = IMAGE_MAGIC.len();
-    let iv_end = iv_start + 16;
-    let iv = &encrypted[iv_start..iv_end];
-    
+    let iv_end = offset + 16;
+    let mut iv = [0u8; 16];
+    iv.copy_from_slice(&encrypted[offset..iv_end]);
+
     // 提取密文
     let ciphertext = &encrypted[iv_end..];
     let mut buffer = ciphertext.to_vec();
-    
-    // 使用 AES-256-CTR 解密
-    let mut cipher = Aes256Ctr::new(key.into(), iv.into());
-    cipher.apply_keystream(&mut buffer);
-    
+
+    // 按照标记的算法解密
+    match method {
+        ImageEncryption::Aes256Ctr => {
+            let mut cipher = Aes256Ctr::new(key.into(), &iv.into());
+            cipher.apply_keystream(&mut buffer);
+        }
+    }
+
     Ok(buffer)
 }

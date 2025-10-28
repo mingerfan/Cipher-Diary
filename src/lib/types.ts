@@ -1,3 +1,5 @@
+export type TextEncryption = 'aes256_gcm';
+
 export interface EntrySummary {
   id: string;
   title: string;
@@ -15,4 +17,6 @@ export interface UnlockResponse {
   created: boolean;
   last_saved?: string | null;
   vault_root: string;
+  text_encryption: TextEncryption;
+  available_text_encryptions: TextEncryption[];
 }

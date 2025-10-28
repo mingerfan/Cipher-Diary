@@ -1,5 +1,5 @@
 import { derived, writable } from 'svelte/store';
-import type { EntryDetail, EntrySummary } from '../types';
+import type { EntryDetail, EntrySummary, TextEncryption } from '../types';
 
 export const unlocked = writable(false);
 export const entries = writable<EntrySummary[]>([]);
@@ -8,6 +8,8 @@ export const searchTerm = writable('');
 export const lastSaved = writable<string | null>(null);
 export const statusMessage = writable<string | null>(null);
 export const activeEntryDetail = writable<EntryDetail | null>(null);
+export const textEncryption = writable<TextEncryption>('aes256_gcm');
+export const availableTextEncryptions = writable<TextEncryption[]>(['aes256_gcm']);
 
 const VAULT_ROOT_KEY = 'diary:vault-root';
 
