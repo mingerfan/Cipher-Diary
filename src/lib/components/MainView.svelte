@@ -260,7 +260,7 @@
   async function handleDelete() {
     const detail = currentDetail;
     if (!detail) return;
-    if (!confirm('确定要删除当前日记吗？操作不可撤销。')) {
+    if (!await confirm('确定要删除当前日记吗？操作不可撤销。')) {
       return;
     }
     deleting = true;
