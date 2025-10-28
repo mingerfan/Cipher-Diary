@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
+  
   import { get } from 'svelte/store';
   import { pickVaultDirectory, unlockVault } from '../api';
   import {
@@ -8,12 +8,12 @@
     entries,
     lastSaved,
     statusMessage,
-    unlocked,
+    unlocked as unlockedStore,
     vaultRoot
   } from '../stores/vault';
   import type { UnlockResponse } from '../types';
 
-  const dispatch = createEventDispatcher<{ unlocked: { created: boolean } }>();
+  let { unlocked } = $props<{ unlocked?: (payload: { created: boolean }) => void }>();
 
   let passphrase = $state('');
   let confirm = $state('');
@@ -68,10 +68,10 @@
       lastSaved.set(response.last_saved ?? null);
       vaultRoot.set(response.vault_root);
       activeEntryDetail.set(null);
-      unlocked.set(true);
+      unlockedStore.set(true);
       activeEntryId.set(response.entries[0]?.id ?? null);
       statusMessage.set(response.created ? '新的日记库已创建' : '日记库已解锁');
-      dispatch('unlocked', { created: response.created });
+      unlocked?.({ created: response.created });
       selectedDirectory = null;
     } catch (err) {
       const message = err instanceof Error ? err.message : '无法解锁日记库';

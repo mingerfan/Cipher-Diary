@@ -72,6 +72,13 @@
 
     const unsubscribes: Array<() => void> = [];
 
+    const key_handler = (e: KeyboardEvent) => {
+      if (e.key === 'l' && e.ctrlKey) {
+        handleLock();
+      }
+    }
+    window.addEventListener('keydown', key_handler);
+
     if (typeof window !== 'undefined') {
       window.addEventListener('resize', updateScreenSize);
 
@@ -107,6 +114,7 @@
     return () => {
       if (typeof window !== 'undefined') {
         window.removeEventListener('resize', updateScreenSize);
+        window.removeEventListener('keydown', key_handler);
       }
       unsubscribes.forEach((fn) => fn());
     };

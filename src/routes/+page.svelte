@@ -38,8 +38,8 @@
     }
   });
 
-  function handleUnlocked(event: CustomEvent<{ created: boolean }>) {
-    if (!event.detail?.created) {
+  function handleUnlocked(payload: { created: boolean }) {
+    if (!payload?.created) {
       statusMessage.set('欢迎回来');
     }
   }
@@ -48,7 +48,7 @@
 {#if $unlocked}
   <MainView />
 {:else}
-  <UnlockView on:unlocked={handleUnlocked} />
+  <UnlockView unlocked={handleUnlocked} />
 {/if}
 
 {#if message}
