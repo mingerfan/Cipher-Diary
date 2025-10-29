@@ -10,7 +10,9 @@
     searchTerm,
     statusMessage,
     unlocked,
-    vaultRoot
+    vaultRoot,
+    availableTextEncryptions,
+    textEncryption
   } from '../stores/vault';
   import {
     createVaultEntry,
@@ -25,11 +27,12 @@
     pickImageFile,
     updateVaultEntry
   } from '../api';
-  import type { EntryDetail } from '../types';
+  import type { EntryDetail, TextEncryption } from '../types';
   import { marked } from 'marked';
 
   let localTitle = $state('');
   let localContent = $state('');
+  let localEncryption = $state<TextEncryption>(get(textEncryption));
   let saving = $state(false);
   let saveError = $state<string | null>(null);
   let deleting = $state(false);
@@ -54,6 +57,11 @@
   let activeEntryIdValue = $state<string | null>(get(activeEntryId));
   let vaultRootValue = $state<string | null>(get(vaultRoot));
   let currentDetail = $state<EntryDetail | null>(get(activeEntryDetail));
+
+  const ENCRYPTION_LABELS: Record<TextEncryption, string> = {
+    aes256_gcm: 'AES-256-GCM',
+    chacha20_poly1305: 'ChaCha20-Poly1305'
+  };
 
   function updateScreenSize() {
     if (typeof window === 'undefined') return;
@@ -169,7 +177,12 @@
       entries.update((items) =>
         items.map((item) =>
           item.id === entry.id
-            ? { ...item, title: entry.title, updated_at: entry.updated_at }
+            ? {
+                ...item,
+                title: entry.title,
+                updated_at: entry.updated_at,
+                encryption: entry.encryption
+              }
             : item
         )
       );
@@ -177,6 +190,7 @@
       loadedEntryId = entry.id;
       localTitle = entry.title;
       localContent = entry.content;
+      localEncryption = entry.encryption;
       saveError = null;
     } catch (err) {
       const message = err instanceof Error ? err.message : '无法读取日记条目';
@@ -227,19 +241,26 @@
       const updated: EntryDetail = await updateVaultEntry({
         ...detail,
         title: localTitle,
-        content: localContent
+        content: localContent,
+        encryption: localEncryption
       });
       activeEntryDetail.set(updated);
       entries.update((items) =>
         items.map((item) =>
           item.id === updated.id
-            ? { ...item, title: updated.title, updated_at: updated.updated_at }
+            ? {
+                ...item,
+                title: updated.title,
+                updated_at: updated.updated_at,
+                encryption: updated.encryption
+              }
             : item
         )
       );
       loadedEntryId = updated.id;
       localTitle = updated.title;
       localContent = updated.content;
+      localEncryption = updated.encryption;
       lastSaved.set(updated.updated_at ?? null);
       statusMessage.set('已保存');
     } catch (err) {
@@ -251,7 +272,8 @@
 
   async function handleCreate() {
     try {
-      const entry = await createVaultEntry('新的日记', '');
+      const defaultEncryption = get(textEncryption);
+      const entry = await createVaultEntry('新的日记', '', defaultEncryption);
       const { content, ...summary } = entry;
       entries.update((items) => [summary, ...items]);
       activeEntryDetail.set(entry);
@@ -259,6 +281,7 @@
       loadedEntryId = entry.id;
       localTitle = entry.title;
       localContent = entry.content;
+      localEncryption = entry.encryption;
       statusMessage.set('已创建新的日记');
     } catch (err) {
       saveError = err instanceof Error ? err.message : '无法创建日记';
@@ -393,6 +416,23 @@
     }
   });
 
+  async function handleEncryptionChange(event: Event) {
+    const detail = currentDetail;
+    if (!detail) return;
+    const value = (event.target as HTMLSelectElement).value as TextEncryption;
+    localEncryption = value;
+    const updatedDetail: EntryDetail = { ...detail, encryption: value };
+    activeEntryDetail.set(updatedDetail);
+    currentDetail = updatedDetail;
+    statusMessage.set('');
+    saveError = null;
+    if (debounceTimer) {
+      clearTimeout(debounceTimer);
+      debounceTimer = null;
+    }
+    await saveActiveEntry();
+  }
+
   const imageCache = new Map<string, string>();
 
   async function resolveImageSource(root: string | null, href: string): Promise<string> {
@@ -515,6 +555,15 @@
   });
 
   $effect(() => {
+    const detail = currentDetail;
+    if (!detail) {
+      localEncryption = get(textEncryption);
+      return;
+    }
+    localEncryption = detail.encryption;
+  });
+
+  $effect(() => {
     const content = localContent;
     const root = vaultRootValue;
     if (!content && !root) {
@@ -602,6 +651,18 @@
           <button class="danger" onclick={handleDelete} disabled={deleting}>删除</button>
         </div>
       </div>
+
+      <label class="input-label" for="entry-encryption">加密算法</label>
+      <select
+        id="entry-encryption"
+        bind:value={localEncryption}
+        onchange={handleEncryptionChange}
+        disabled={saving}
+      >
+        {#each $availableTextEncryptions as option (option)}
+          <option value={option}>{ENCRYPTION_LABELS[option] ?? option}</option>
+        {/each}
+      </select>
 
       <label class="input-label" for="entry-title">标题</label>
       <input
@@ -1114,6 +1175,7 @@
   }
 
   .title-input,
+  select,
   textarea {
     width: 100%;
     border-radius: 12px;
@@ -1128,6 +1190,7 @@
   }
 
   .title-input:focus,
+  select:focus,
   textarea:focus {
     outline: none;
     border-color: rgba(99, 102, 241, 0.8);

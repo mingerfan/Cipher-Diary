@@ -25,7 +25,8 @@
   let selectedDirectory = $state<string | null>(get(vaultRoot));
 
   const ENCRYPTION_LABELS: Record<TextEncryption, string> = {
-    aes256_gcm: 'AES-256-GCM'
+    aes256_gcm: 'AES-256-GCM',
+    chacha20_poly1305: 'ChaCha20-Poly1305'
   };
 
   let selectedEncryption = $state<TextEncryption>(get(textEncryption));

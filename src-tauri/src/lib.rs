@@ -74,13 +74,14 @@ fn load_entry(id: Uuid, state: State<AppState>) -> Result<Entry, String> {
 fn create_entry(
     title: Option<String>,
     content: Option<String>,
+    encryption: Option<TextEncryption>,
     state: State<AppState>,
 ) -> Result<Entry, String> {
     let title = title.unwrap_or_else(|| "Untitled entry".to_string());
     let content = content.unwrap_or_default();
     state
         .manager
-        .create_entry(&title, &content)
+        .create_entry(&title, &content, encryption)
         .map_err(|err| err.to_string())
 }
 

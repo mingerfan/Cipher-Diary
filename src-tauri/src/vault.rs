@@ -4,6 +4,7 @@ use aes_gcm::{Aes256Gcm, Nonce};
 use anyhow::{anyhow, Context, Result};
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::{engine::general_purpose, Engine as _};
+use chacha20poly1305::{ChaCha20Poly1305, Nonce as ChaChaNonce};
 use ctr::cipher::{KeyIvInit, StreamCipher};
 use parking_lot::Mutex;
 use rand::{rngs::OsRng, RngCore};
@@ -20,12 +21,17 @@ const METADATA_VERSION: u32 = 1;
 const ENTRY_VERSION: u32 = 1;
 const IMAGE_MAGIC_PREFIX: &[u8] = b"VAULTIMG"; // 加密图片的固定前缀
 
-const SUPPORTED_TEXT_ENCRYPTIONS: [TextEncryption; 1] = [TextEncryption::Aes256Gcm];
+const SUPPORTED_TEXT_ENCRYPTIONS: [TextEncryption; 2] = [
+    TextEncryption::Aes256Gcm,
+    TextEncryption::ChaCha20Poly1305,
+];
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
 pub enum TextEncryption {
+    #[serde(rename = "aes256_gcm")]
     Aes256Gcm,
+    #[serde(rename = "chacha20_poly1305")]
+    ChaCha20Poly1305,
 }
 
 impl Default for TextEncryption {
@@ -63,6 +69,8 @@ pub struct EntryInfo {
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
     pub folder: Option<String>,
+    #[serde(default)]
+    pub encryption: TextEncryption,
 }
 
 impl EntryInfo {
@@ -79,10 +87,16 @@ pub struct Entry {
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
     pub folder: Option<String>,
+    #[serde(default)]
+    pub encryption: TextEncryption,
 }
 
 impl Entry {
-    pub fn new(title: impl Into<String>, content: impl Into<String>) -> Self {
+    pub fn new(
+        title: impl Into<String>,
+        content: impl Into<String>,
+        encryption: TextEncryption,
+    ) -> Self {
         let now = OffsetDateTime::now_utc();
         Self {
             id: Uuid::new_v4(),
@@ -91,6 +105,7 @@ impl Entry {
             created_at: now,
             updated_at: now,
             folder: None,
+            encryption,
         }
     }
 
@@ -101,6 +116,7 @@ impl Entry {
             created_at: self.created_at,
             updated_at: self.updated_at,
             folder: self.folder.clone(),
+            encryption: self.encryption,
         }
     }
 }
@@ -255,7 +271,7 @@ impl VaultManager {
         let content = load_entry_content(
             &vault.entries_dir,
             &vault.key,
-            vault.text_encryption,
+            meta.encryption,
             &meta.id,
         )?;
         Ok(Entry {
@@ -265,19 +281,24 @@ impl VaultManager {
             created_at: meta.created_at,
             updated_at: meta.updated_at,
             folder: meta.folder,
+            encryption: meta.encryption,
         })
     }
 
-    pub fn create_entry(&self, title: &str, content: &str) -> Result<Entry> {
+    pub fn create_entry(
+        &self,
+        title: &str,
+        content: &str,
+        encryption: Option<TextEncryption>,
+    ) -> Result<Entry> {
         let mut guard = self.inner.lock();
         let vault = guard.as_mut().ok_or_else(|| anyhow!("vault is locked"))?;
-        let entry = Entry::new(title, content);
-        save_entry_content(
-            &vault.entries_dir,
-            &vault.key,
-            vault.text_encryption,
-            &entry,
-        )?;
+        let method = encryption.unwrap_or(vault.text_encryption);
+        if !SUPPORTED_TEXT_ENCRYPTIONS.contains(&method) {
+            return Err(anyhow!("unsupported text encryption method"));
+        }
+        let entry = Entry::new(title, content, method);
+        save_entry_content(&vault.entries_dir, &vault.key, method, &entry)?;
         vault.metadata.push(entry.metadata());
         save_metadata(vault)?;
         Ok(entry)
@@ -292,8 +313,13 @@ impl VaultManager {
             .find(|item| item.id == entry.id)
             .ok_or_else(|| anyhow!("entry not found"))?;
 
+        if !SUPPORTED_TEXT_ENCRYPTIONS.contains(&entry.encryption) {
+            return Err(anyhow!("unsupported text encryption method"));
+        }
+
         info.title = entry.title.clone();
         info.folder = entry.folder.clone();
+        info.encryption = entry.encryption;
         info.touch();
 
         let updated = Entry {
@@ -303,12 +329,13 @@ impl VaultManager {
             created_at: info.created_at,
             updated_at: info.updated_at,
             folder: info.folder.clone(),
+            encryption: info.encryption,
         };
 
         save_entry_content(
             &vault.entries_dir,
             &vault.key,
-            vault.text_encryption,
+            info.encryption,
             &updated,
         )?;
         save_metadata(vault)?;
@@ -343,7 +370,7 @@ impl VaultManager {
             let content = load_entry_content(
                 &vault.entries_dir,
                 &vault.key,
-                vault.text_encryption,
+                info.encryption,
                 &info.id,
             )?;
             lines.push(format!(
@@ -593,6 +620,17 @@ fn save_entry_content(
                 .map_err(|_| anyhow!("encryption failed"))?;
             (nonce_bytes, ciphertext)
         }
+        TextEncryption::ChaCha20Poly1305 => {
+            let cipher = ChaCha20Poly1305::new_from_slice(key).map_err(|_| anyhow!("invalid key"))?;
+            let mut nonce_bytes = [0u8; 12];
+            OsRng.fill_bytes(&mut nonce_bytes);
+            #[allow(deprecated)]
+            let nonce = ChaChaNonce::from_slice(&nonce_bytes);
+            let ciphertext = cipher
+                .encrypt(nonce, entry.content.as_bytes())
+                .map_err(|_| anyhow!("encryption failed"))?;
+            (nonce_bytes, ciphertext)
+        }
     };
 
     let stored = StoredEntry {
@@ -637,6 +675,14 @@ fn load_entry_content(
             let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| anyhow!("invalid key"))?;
             #[allow(deprecated)]
             let nonce = Nonce::from_slice(&nonce_bytes);
+            cipher
+                .decrypt(nonce, ciphertext.as_ref())
+                .map_err(|_| anyhow!("decryption failed"))?
+        }
+        TextEncryption::ChaCha20Poly1305 => {
+            let cipher = ChaCha20Poly1305::new_from_slice(key).map_err(|_| anyhow!("invalid key"))?;
+            #[allow(deprecated)]
+            let nonce = ChaChaNonce::from_slice(&nonce_bytes);
             cipher
                 .decrypt(nonce, ciphertext.as_ref())
                 .map_err(|_| anyhow!("decryption failed"))?

@@ -9,7 +9,10 @@ export const lastSaved = writable<string | null>(null);
 export const statusMessage = writable<string | null>(null);
 export const activeEntryDetail = writable<EntryDetail | null>(null);
 export const textEncryption = writable<TextEncryption>('aes256_gcm');
-export const availableTextEncryptions = writable<TextEncryption[]>(['aes256_gcm']);
+export const availableTextEncryptions = writable<TextEncryption[]>([
+  'aes256_gcm',
+  'chacha20_poly1305'
+]);
 
 const VAULT_ROOT_KEY = 'diary:vault-root';
 

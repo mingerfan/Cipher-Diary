@@ -1,4 +1,4 @@
-export type TextEncryption = 'aes256_gcm';
+export type TextEncryption = 'aes256_gcm' | 'chacha20_poly1305';
 
 export interface EntrySummary {
   id: string;
@@ -6,6 +6,7 @@ export interface EntrySummary {
   created_at: string;
   updated_at: string;
   folder?: string | null;
+  encryption: TextEncryption;
 }
 
 export interface EntryDetail extends EntrySummary {

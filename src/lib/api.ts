@@ -26,8 +26,12 @@ export async function loadVaultEntry(id: string): Promise<EntryDetail> {
   return invoke<EntryDetail>('load_entry', { id });
 }
 
-export async function createVaultEntry(title?: string, content?: string): Promise<EntryDetail> {
-  return invoke<EntryDetail>('create_entry', { title, content });
+export async function createVaultEntry(
+  title?: string,
+  content?: string,
+  encryption?: TextEncryption
+): Promise<EntryDetail> {
+  return invoke<EntryDetail>('create_entry', { title, content, encryption });
 }
 
 export async function updateVaultEntry(entry: EntryDetail): Promise<EntryDetail> {
