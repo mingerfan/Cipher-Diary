@@ -18,7 +18,7 @@
     createVaultEntry,
     decryptImage,
     deleteVaultEntry,
-    exportVaultToFile,
+    changeVaultPassphrase,
     fetchEntries,
     importClipboardImage,
     importVaultImage,
@@ -39,6 +39,13 @@
   let loadingEntries = $state(false);
   let loadingEntry = $state(false);
   let editorTextarea = $state<HTMLTextAreaElement | null>(null);
+  
+  // 修改密码对话框状态
+  let showPasswordDialog = $state(false);
+  let oldPassword = $state('');
+  let newPassword = $state('');
+  let confirmPassword = $state('');
+  let changingPassword = $state(false);
 
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let loadedEntryId: string | null = null;
@@ -315,14 +322,50 @@
     }
   }
 
-  async function handleExport() {
+  function handleOpenPasswordDialog() {
+    oldPassword = '';
+    newPassword = '';
+    confirmPassword = '';
+    showPasswordDialog = true;
+    saveError = null;
+  }
+
+  function handleClosePasswordDialog() {
+    showPasswordDialog = false;
+    oldPassword = '';
+    newPassword = '';
+    confirmPassword = '';
+    saveError = null;
+  }
+
+  async function handleChangePassword() {
+    if (!oldPassword.trim()) {
+      saveError = '请输入当前密码';
+      return;
+    }
+    if (!newPassword.trim()) {
+      saveError = '请输入新密码';
+      return;
+    }
+    if (newPassword.length < 6) {
+      saveError = '新密码长度至少需要 6 个字符';
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      saveError = '两次输入的新密码不一致';
+      return;
+    }
+
+    changingPassword = true;
+    saveError = null;
     try {
-      const path = await exportVaultToFile();
-      if (path) {
-        statusMessage.set(`已导出到 ${path}`);
-      }
+      await changeVaultPassphrase(oldPassword, newPassword);
+      statusMessage.set('密码修改成功');
+      handleClosePasswordDialog();
     } catch (err) {
-      saveError = err instanceof Error ? err.message : '导出失败';
+      saveError = err instanceof Error ? err.message : '密码修改失败';
+    } finally {
+      changingPassword = false;
     }
   }
 
@@ -645,7 +688,7 @@
           </p>
         </div>
         <div class="tools">
-          <button class="ghost" onclick={handleExport}>导出</button>
+          <button class="ghost" onclick={handleOpenPasswordDialog}>修改密码</button>
           <button class="ghost" onclick={handleInsertImage}>插入图片</button>
           <button class="ghost" onclick={handleLock}>锁定</button>
           <button class="danger" onclick={handleDelete} disabled={deleting}>删除</button>
@@ -756,6 +799,70 @@
     </nav>
   {/if}
 </div>
+
+<!-- 修改密码对话框 -->
+{#if showPasswordDialog}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="dialog-overlay" onclick={handleClosePasswordDialog}>
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div class="dialog-content" onclick={(e) => e.stopPropagation()}>
+      <h2>修改密码</h2>
+      <p class="dialog-hint">修改密码后，所有数据将使用新密码重新加密</p>
+      
+      <div class="dialog-form">
+        <label for="old-password">当前密码</label>
+        <input
+          id="old-password"
+          type="password"
+          bind:value={oldPassword}
+          placeholder="请输入当前密码"
+          disabled={changingPassword}
+        />
+
+        <label for="new-password">新密码</label>
+        <input
+          id="new-password"
+          type="password"
+          bind:value={newPassword}
+          placeholder="至少 6 个字符"
+          disabled={changingPassword}
+        />
+
+        <label for="confirm-password">确认新密码</label>
+        <input
+          id="confirm-password"
+          type="password"
+          bind:value={confirmPassword}
+          placeholder="再次输入新密码"
+          disabled={changingPassword}
+        />
+
+        {#if saveError}
+          <div class="error-message">⚠️ {saveError}</div>
+        {/if}
+
+        <div class="dialog-actions">
+          <button 
+            class="ghost" 
+            onclick={handleClosePasswordDialog}
+            disabled={changingPassword}
+          >
+            取消
+          </button>
+          <button 
+            class="primary" 
+            onclick={handleChangePassword}
+            disabled={changingPassword}
+          >
+            {changingPassword ? '修改中...' : '确认修改'}
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+{/if}
 
 <style>
   .app-container {
@@ -1308,6 +1415,118 @@
     margin-bottom: 0.5rem;
   }
 
+  /* 修改密码对话框样式 */
+  .dialog-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.75);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    backdrop-filter: blur(4px);
+    animation: fadeIn 0.2s ease;
+  }
+
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  .dialog-content {
+    background: #0f172a;
+    border: 1px solid rgba(99, 102, 241, 0.4);
+    border-radius: 16px;
+    padding: 2rem;
+    max-width: 450px;
+    width: 90%;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    animation: slideUp 0.3s ease;
+  }
+
+  @keyframes slideUp {
+    from {
+      transform: translateY(20px);
+      opacity: 0;
+    }
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
+
+  .dialog-content h2 {
+    margin: 0 0 0.5rem;
+    font-size: 1.5rem;
+    color: #e2e8f0;
+  }
+
+  .dialog-hint {
+    margin: 0 0 1.5rem;
+    color: #94a3b8;
+    font-size: 0.9rem;
+  }
+
+  .dialog-form {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .dialog-form label {
+    font-weight: 600;
+    font-size: 0.95rem;
+    color: #cbd5e1;
+    margin-bottom: -0.5rem;
+  }
+
+  .dialog-form input {
+    padding: 0.75rem 1rem;
+    border-radius: 10px;
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    background: rgba(15, 23, 42, 0.8);
+    color: #e2e8f0;
+    font-size: 1rem;
+    transition: border 0.2s ease, box-shadow 0.2s ease;
+  }
+
+  .dialog-form input:focus {
+    outline: none;
+    border-color: rgba(99, 102, 241, 0.8);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25);
+  }
+
+  .dialog-form input:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .error-message {
+    padding: 0.75rem 1rem;
+    background: rgba(239, 68, 68, 0.15);
+    border: 1px solid rgba(239, 68, 68, 0.4);
+    border-radius: 10px;
+    color: #fca5a5;
+    font-size: 0.9rem;
+  }
+
+  .dialog-actions {
+    display: flex;
+    gap: 0.75rem;
+    margin-top: 0.5rem;
+  }
+
+  .dialog-actions button {
+    flex: 1;
+  }
+
   /* 平板设备 */
   @media (max-width: 1024px) {
     .large-screen .layout {
@@ -1390,6 +1609,24 @@
 
   /* 移动设备 - 小屏手机 */
   @media (max-width: 480px) {
+    .dialog-content {
+      padding: 1.5rem;
+      max-width: 95%;
+    }
+
+    .dialog-content h2 {
+      font-size: 1.3rem;
+    }
+
+    .dialog-form {
+      gap: 0.85rem;
+    }
+
+    .dialog-form input {
+      padding: 0.65rem 0.85rem;
+      font-size: 0.95rem;
+    }
+
     aside {
       padding: 0.75rem;
     }

@@ -42,6 +42,13 @@ export async function deleteVaultEntry(id: string): Promise<void> {
   await invoke('delete_entry', { id });
 }
 
+export async function changeVaultPassphrase(
+  oldPassphrase: string,
+  newPassphrase: string
+): Promise<void> {
+  await invoke('change_vault_passphrase', { oldPassphrase, newPassphrase });
+}
+
 export async function exportVaultToFile(): Promise<string> {
   return invoke<string>('export_plaintext_file');
 }

@@ -168,6 +168,24 @@ fn decrypt_image(path: String, state: State<AppState>) -> Result<Vec<u8>, String
         .map_err(|err| err.to_string())
 }
 
+#[tauri::command]
+fn change_vault_passphrase(
+    old_passphrase: String,
+    new_passphrase: String,
+    state: State<AppState>,
+) -> Result<(), String> {
+    if new_passphrase.trim().is_empty() {
+        return Err("新密码不能为空".to_string());
+    }
+    if new_passphrase.len() < 6 {
+        return Err("新密码长度至少需要 6 个字符".to_string());
+    }
+    state
+        .manager
+        .change_passphrase(&old_passphrase, &new_passphrase)
+        .map_err(|err| err.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -186,7 +204,8 @@ pub fn run() {
             store_image,
             store_image_from_bytes,
             export_plaintext_file,
-            decrypt_image
+            decrypt_image,
+            change_vault_passphrase
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

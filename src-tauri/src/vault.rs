@@ -27,18 +27,15 @@ const SUPPORTED_TEXT_ENCRYPTIONS: [TextEncryption; 2] = [
 ];
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Default)]
 pub enum TextEncryption {
     #[serde(rename = "aes256_gcm")]
+    #[default]
     Aes256Gcm,
     #[serde(rename = "chacha20_poly1305")]
     ChaCha20Poly1305,
 }
 
-impl Default for TextEncryption {
-    fn default() -> Self {
-        TextEncryption::Aes256Gcm
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ImageEncryption {
@@ -470,6 +467,98 @@ impl VaultManager {
         let encrypted = fs::read(&image_path).context("无法读取图片文件")?;
         decrypt_image_data(&vault.key, &encrypted)
     }
+
+    pub fn change_passphrase(&self, old_passphrase: &str, new_passphrase: &str) -> Result<()> {
+        let mut guard = self.inner.lock();
+        let vault = guard.as_mut().ok_or_else(|| anyhow!("vault is locked"))?;
+
+        // 验证旧密码
+        let old_key = derive_key(old_passphrase, &vault.salt)?;
+        if old_key != vault.key {
+            return Err(anyhow!("旧密码错误"));
+        }
+
+        // 生成新的 salt 和 key
+        let mut new_salt = [0u8; 16];
+        OsRng.fill_bytes(&mut new_salt);
+        let new_key = derive_key(new_passphrase, &new_salt)?;
+
+        // 1. 重新加密所有日记条目
+        for entry_info in vault.metadata.iter() {
+            let content = load_entry_content(
+                &vault.entries_dir,
+                &vault.key,
+                entry_info.encryption,
+                &entry_info.id,
+            )?;
+
+            // 创建临时 Entry 对象用于保存
+            let temp_entry = Entry {
+                id: entry_info.id,
+                title: entry_info.title.clone(),
+                content,
+                created_at: entry_info.created_at,
+                updated_at: entry_info.updated_at,
+                folder: entry_info.folder.clone(),
+                encryption: entry_info.encryption,
+            };
+
+            // 使用新密钥重新加密
+            save_entry_content(
+                &vault.entries_dir,
+                &new_key,
+                entry_info.encryption,
+                &temp_entry,
+            )?;
+        }
+
+        // 2. 重新加密所有图片附件
+        let attachments_dir = &vault.attachments_dir;
+        if attachments_dir.exists() {
+            reencrypt_images_recursive(attachments_dir, &vault.key, &new_key)?;
+        }
+
+        // 3. 更新 vault 的 salt 和 key
+        vault.salt = new_salt;
+        vault.key = new_key;
+
+        // 4. 保存元数据（使用新密钥和新盐）
+        save_metadata(vault)?;
+
+        Ok(())
+    }
+}
+
+fn reencrypt_images_recursive(dir: &Path, old_key: &[u8; 32], new_key: &[u8; 32]) -> Result<()> {
+    if !dir.exists() || !dir.is_dir() {
+        return Ok(());
+    }
+
+    for entry in fs::read_dir(dir).context("failed to read directory")? {
+        let entry = entry.context("failed to read directory entry")?;
+        let path = entry.path();
+
+        if path.is_dir() {
+            reencrypt_images_recursive(&path, old_key, new_key)?;
+        } else if path.is_file() {
+            // 尝试重新加密图片文件
+            if let Ok(encrypted) = fs::read(&path) {
+                // 检查是否是加密的图片文件
+                if encrypted.starts_with(IMAGE_MAGIC_PREFIX) {
+                    // 解密
+                    if let Ok(plaintext) = decrypt_image_data(old_key, &encrypted) {
+                        // 用新密钥重新加密
+                        if let Ok(reencrypted) = encrypt_image_data(new_key, &plaintext) {
+                            fs::write(&path, reencrypted)
+                                .with_context(|| format!("failed to reencrypt image: {:?}", path))?;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn save_metadata(vault: &mut UnlockedVault) -> Result<()> {
@@ -809,7 +898,6 @@ fn decrypt_image_data(key: &[u8; 32], encrypted: &[u8]) -> Result<Vec<u8>> {
 
     let mut offset = IMAGE_MAGIC_PREFIX.len();
     let (method, marker_len) = ImageEncryption::detect(&encrypted[offset..])
-        .map(|(m, len)| (m, len))
         .unwrap_or((ImageEncryption::Aes256Ctr, 0));
     offset += marker_len;
 
