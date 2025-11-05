@@ -358,12 +358,24 @@
 
     changingPassword = true;
     saveError = null;
+    statusMessage.set('正在重新加密所有数据，请勿关闭程序...');
+    
     try {
       await changeVaultPassphrase(oldPassword, newPassword);
-      statusMessage.set('密码修改成功');
+      statusMessage.set('✅ 密码修改成功！所有数据已使用新密码加密');
       handleClosePasswordDialog();
     } catch (err) {
-      saveError = err instanceof Error ? err.message : '密码修改失败';
+      const errorMsg = err instanceof Error ? err.message : '密码修改失败';
+      saveError = errorMsg;
+      
+      // 根据错误消息提供更详细的指导
+      if (errorMsg.includes('原数据未被修改')) {
+        statusMessage.set('');
+      } else if (errorMsg.includes('数据完整性')) {
+        statusMessage.set('⚠️ 请尝试重新解锁查看数据是否完整');
+      } else {
+        statusMessage.set('');
+      }
     } finally {
       changingPassword = false;
     }
@@ -809,7 +821,8 @@
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="dialog-content" onclick={(e) => e.stopPropagation()}>
       <h2>修改密码</h2>
-      <p class="dialog-hint">修改密码后，所有数据将使用新密码重新加密</p>
+      <p class="dialog-hint">修改密码后，所有数据将使用新密码重新加密。操作过程中请勿关闭程序。</p>
+      <p class="dialog-hint safety-note">🛡️ 安全机制：数据将先在临时位置重新加密，确认成功后才会替换原文件，最大程度保护您的数据安全。</p>
       
       <div class="dialog-form">
         <label for="old-password">当前密码</label>
@@ -1469,9 +1482,19 @@
   }
 
   .dialog-hint {
-    margin: 0 0 1.5rem;
+    margin: 0 0 1rem;
     color: #94a3b8;
     font-size: 0.9rem;
+  }
+
+  .dialog-hint.safety-note {
+    margin-bottom: 1.5rem;
+    padding: 0.75rem;
+    background: rgba(99, 102, 241, 0.1);
+    border-left: 3px solid rgba(99, 102, 241, 0.5);
+    border-radius: 6px;
+    font-size: 0.85rem;
+    line-height: 1.5;
   }
 
   .dialog-form {

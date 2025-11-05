@@ -483,78 +483,274 @@ impl VaultManager {
         OsRng.fill_bytes(&mut new_salt);
         let new_key = derive_key(new_passphrase, &new_salt)?;
 
-        // 1. 重新加密所有日记条目
-        for entry_info in vault.metadata.iter() {
-            let content = load_entry_content(
-                &vault.entries_dir,
-                &vault.key,
-                entry_info.encryption,
-                &entry_info.id,
-            )?;
+        // 创建临时备份目录
+        let vault_root = vault.path.parent().ok_or_else(|| anyhow!("invalid vault path"))?;
+        let backup_root = vault_root.join(format!(".vault_backup_{}", Uuid::new_v4()));
+        let backup_entries = backup_root.join("entries");
+        let backup_attachments = backup_root.join("attachments");
+        let backup_metadata = backup_root.join("vault.json");
 
-            // 创建临时 Entry 对象用于保存
-            let temp_entry = Entry {
-                id: entry_info.id,
-                title: entry_info.title.clone(),
-                content,
-                created_at: entry_info.created_at,
-                updated_at: entry_info.updated_at,
-                folder: entry_info.folder.clone(),
-                encryption: entry_info.encryption,
+        fs::create_dir_all(&backup_entries).context("failed to create backup directory")?;
+        fs::create_dir_all(&backup_attachments).context("failed to create backup directory")?;
+
+        // 执行备份和重新加密的操作，使用闭包包装以便统一错误处理
+        let result: Result<()> = (|| {
+            // 1. 备份并重新加密所有日记条目到临时目录
+            for entry_info in vault.metadata.iter() {
+                // 读取原内容
+                let content = load_entry_content(
+                    &vault.entries_dir,
+                    &vault.key,
+                    entry_info.encryption,
+                    &entry_info.id,
+                )?;
+
+                // 创建临时 Entry 对象
+                let temp_entry = Entry {
+                    id: entry_info.id,
+                    title: entry_info.title.clone(),
+                    content,
+                    created_at: entry_info.created_at,
+                    updated_at: entry_info.updated_at,
+                    folder: entry_info.folder.clone(),
+                    encryption: entry_info.encryption,
+                };
+
+                // 先备份原文件
+                let original_path = entry_file_path(&vault.entries_dir, &entry_info.id);
+                let backup_path = entry_file_path(&backup_entries, &entry_info.id);
+                if original_path.exists() {
+                    fs::copy(&original_path, &backup_path)
+                        .context("failed to backup entry file")?;
+                }
+
+                // 使用新密钥重新加密并保存到临时位置
+                save_entry_content_to_path(
+                    &backup_path,
+                    &new_key,
+                    entry_info.encryption,
+                    &temp_entry,
+                )?;
+            }
+
+            // 2. 备份并重新加密所有图片附件到临时目录
+            let attachments_dir = &vault.attachments_dir;
+            if attachments_dir.exists() {
+                copy_and_reencrypt_images_recursive(
+                    attachments_dir,
+                    &backup_attachments,
+                    &vault.key,
+                    &new_key,
+                )?;
+            }
+
+            // 3. 保存新的元数据到临时位置
+            let new_metadata = VaultMetadata {
+                version: METADATA_VERSION,
+                entries: vault.metadata.clone(),
+                text_encryption: vault.text_encryption,
             };
-
-            // 使用新密钥重新加密
-            save_entry_content(
-                &vault.entries_dir,
+            save_vault(
+                &backup_metadata,
+                &new_salt,
                 &new_key,
-                entry_info.encryption,
-                &temp_entry,
+                &new_metadata,
+                OffsetDateTime::now_utc(),
             )?;
+
+            Ok(())
+        })();
+
+        // 如果加密失败，清理临时文件并返回错误
+        if let Err(e) = result {
+            let _ = fs::remove_dir_all(&backup_root);
+            return Err(e.context("密码修改失败，原数据未被修改"));
         }
 
-        // 2. 重新加密所有图片附件
-        let attachments_dir = &vault.attachments_dir;
-        if attachments_dir.exists() {
-            reencrypt_images_recursive(attachments_dir, &vault.key, &new_key)?;
-        }
+        // 所有文件都成功加密后，开始原子性替换
+        let replace_result: Result<()> = (|| {
+            // 4. 用新加密的文件替换原文件
+            // 4.1 替换日记条目
+            for entry_info in vault.metadata.iter() {
+                let backup_path = entry_file_path(&backup_entries, &entry_info.id);
+                let original_path = entry_file_path(&vault.entries_dir, &entry_info.id);
+                if backup_path.exists() {
+                    fs::copy(&backup_path, &original_path)
+                        .context("failed to replace entry file")?;
+                }
+            }
 
-        // 3. 更新 vault 的 salt 和 key
+            // 4.2 替换图片附件
+            if backup_attachments.exists() {
+                replace_directory_contents(&backup_attachments, &vault.attachments_dir)?;
+            }
+
+            // 4.3 替换元数据文件
+            fs::copy(&backup_metadata, &vault.path)
+                .context("failed to replace metadata file")?;
+
+            Ok(())
+        })();
+
+        // 清理临时备份目录
+        let _ = fs::remove_dir_all(&backup_root);
+
+        // 如果替换失败，返回错误（此时原文件可能已部分被修改）
+        replace_result.context("文件替换失败，请检查数据完整性")?;
+
+        // 5. 更新内存中的 vault 状态
         vault.salt = new_salt;
         vault.key = new_key;
-
-        // 4. 保存元数据（使用新密钥和新盐）
-        save_metadata(vault)?;
+        vault.last_saved = OffsetDateTime::now_utc();
 
         Ok(())
     }
 }
 
-fn reencrypt_images_recursive(dir: &Path, old_key: &[u8; 32], new_key: &[u8; 32]) -> Result<()> {
-    if !dir.exists() || !dir.is_dir() {
+// 保存加密条目内容到指定路径
+fn save_entry_content_to_path(
+    path: &Path,
+    key: &[u8; 32],
+    method: TextEncryption,
+    entry: &Entry,
+) -> Result<()> {
+    let (nonce_bytes, ciphertext) = match method {
+        TextEncryption::Aes256Gcm => {
+            let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| anyhow!("invalid key"))?;
+            let mut nonce_bytes = [0u8; 12];
+            OsRng.fill_bytes(&mut nonce_bytes);
+            #[allow(deprecated)]
+            let nonce = Nonce::from_slice(&nonce_bytes);
+            let ciphertext = cipher
+                .encrypt(nonce, entry.content.as_bytes())
+                .map_err(|_| anyhow!("encryption failed"))?;
+            (nonce_bytes, ciphertext)
+        }
+        TextEncryption::ChaCha20Poly1305 => {
+            let cipher = ChaCha20Poly1305::new_from_slice(key).map_err(|_| anyhow!("invalid key"))?;
+            let mut nonce_bytes = [0u8; 12];
+            OsRng.fill_bytes(&mut nonce_bytes);
+            #[allow(deprecated)]
+            let nonce = ChaChaNonce::from_slice(&nonce_bytes);
+            let ciphertext = cipher
+                .encrypt(nonce, entry.content.as_bytes())
+                .map_err(|_| anyhow!("encryption failed"))?;
+            (nonce_bytes, ciphertext)
+        }
+    };
+
+    let stored = StoredEntry {
+        version: ENTRY_VERSION,
+        nonce: general_purpose::STANDARD_NO_PAD.encode(nonce_bytes),
+        ciphertext: general_purpose::STANDARD_NO_PAD.encode(ciphertext),
+    };
+
+    let serialized = serde_json::to_string_pretty(&stored).context("failed to serialize entry")?;
+    
+    // 确保父目录存在
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).context("failed to create parent directory")?;
+    }
+    
+    fs::write(path, serialized).context("failed to store entry")
+}
+
+// 复制并重新加密图片目录（递归）
+fn copy_and_reencrypt_images_recursive(
+    src_dir: &Path,
+    dst_dir: &Path,
+    old_key: &[u8; 32],
+    new_key: &[u8; 32],
+) -> Result<()> {
+    if !src_dir.exists() || !src_dir.is_dir() {
         return Ok(());
     }
 
-    for entry in fs::read_dir(dir).context("failed to read directory")? {
-        let entry = entry.context("failed to read directory entry")?;
-        let path = entry.path();
+    fs::create_dir_all(dst_dir).context("failed to create destination directory")?;
 
-        if path.is_dir() {
-            reencrypt_images_recursive(&path, old_key, new_key)?;
-        } else if path.is_file() {
-            // 尝试重新加密图片文件
-            if let Ok(encrypted) = fs::read(&path) {
-                // 检查是否是加密的图片文件
-                if encrypted.starts_with(IMAGE_MAGIC_PREFIX) {
-                    // 解密
-                    if let Ok(plaintext) = decrypt_image_data(old_key, &encrypted) {
-                        // 用新密钥重新加密
-                        if let Ok(reencrypted) = encrypt_image_data(new_key, &plaintext) {
-                            fs::write(&path, reencrypted)
-                                .with_context(|| format!("failed to reencrypt image: {:?}", path))?;
-                        }
-                    }
-                }
+    for entry in fs::read_dir(src_dir).context("failed to read source directory")? {
+        let entry = entry.context("failed to read directory entry")?;
+        let src_path = entry.path();
+        let file_name = src_path
+            .file_name()
+            .ok_or_else(|| anyhow!("invalid file name"))?;
+        let dst_path = dst_dir.join(file_name);
+
+        if src_path.is_dir() {
+            copy_and_reencrypt_images_recursive(&src_path, &dst_path, old_key, new_key)?;
+        } else if src_path.is_file() {
+            // 读取文件
+            let encrypted = fs::read(&src_path)
+                .with_context(|| format!("failed to read file: {:?}", src_path))?;
+
+            // 检查是否是加密的图片文件
+            if encrypted.starts_with(IMAGE_MAGIC_PREFIX) {
+                // 解密
+                let plaintext = decrypt_image_data(old_key, &encrypted)
+                    .with_context(|| format!("failed to decrypt image: {:?}", src_path))?;
+
+                // 用新密钥重新加密
+                let reencrypted = encrypt_image_data(new_key, &plaintext)
+                    .with_context(|| format!("failed to reencrypt image: {:?}", src_path))?;
+
+                // 写入目标位置
+                fs::write(&dst_path, reencrypted)
+                    .with_context(|| format!("failed to write reencrypted image: {:?}", dst_path))?;
+            } else {
+                // 非加密文件，直接复制
+                fs::copy(&src_path, &dst_path)
+                    .with_context(|| format!("failed to copy file: {:?}", src_path))?;
             }
+        }
+    }
+
+    Ok(())
+}
+
+// 替换目录内容（递归删除目标目录并复制源目录）
+fn replace_directory_contents(src_dir: &Path, dst_dir: &Path) -> Result<()> {
+    if !src_dir.exists() {
+        return Ok(());
+    }
+
+    // 先删除目标目录中的所有内容
+    if dst_dir.exists() {
+        for entry in fs::read_dir(dst_dir).context("failed to read destination directory")? {
+            let entry = entry.context("failed to read directory entry")?;
+            let path = entry.path();
+            if path.is_dir() {
+                fs::remove_dir_all(&path)
+                    .with_context(|| format!("failed to remove directory: {:?}", path))?;
+            } else {
+                fs::remove_file(&path)
+                    .with_context(|| format!("failed to remove file: {:?}", path))?;
+            }
+        }
+    } else {
+        fs::create_dir_all(dst_dir).context("failed to create destination directory")?;
+    }
+
+    // 复制源目录的所有内容到目标目录
+    copy_directory_recursive(src_dir, dst_dir)
+}
+
+// 递归复制目录
+fn copy_directory_recursive(src_dir: &Path, dst_dir: &Path) -> Result<()> {
+    fs::create_dir_all(dst_dir).context("failed to create destination directory")?;
+
+    for entry in fs::read_dir(src_dir).context("failed to read source directory")? {
+        let entry = entry.context("failed to read directory entry")?;
+        let src_path = entry.path();
+        let file_name = src_path
+            .file_name()
+            .ok_or_else(|| anyhow!("invalid file name"))?;
+        let dst_path = dst_dir.join(file_name);
+
+        if src_path.is_dir() {
+            copy_directory_recursive(&src_path, &dst_path)?;
+        } else {
+            fs::copy(&src_path, &dst_path)
+                .with_context(|| format!("failed to copy file: {:?}", src_path))?;
         }
     }
 
